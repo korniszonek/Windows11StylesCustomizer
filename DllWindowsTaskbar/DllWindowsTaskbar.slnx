@@ -3,6 +3,9 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="../injector/injector.vcxproj" />
-  <Project Path="DllWindowsTaskbar.vcxproj" />
+  <Project Path="../injector/injector.vcxproj" Id="68681503-71a1-464f-a5f8-13b31aec8f9e">
+    <BuildDependency Project="DllWindowsTaskbar.vcxproj" />
+  </Project>
+  <Project Path="../PipeClient/PipeClient.vcxproj" Id="bc57af8f-10dd-4bdc-800c-aa41f263aff1" />
+  <Project Path="DllWindowsTaskbar.vcxproj" Id="d7dbe3a0-5264-4460-9e81-6f036b8b80be" />
 </Solution>
