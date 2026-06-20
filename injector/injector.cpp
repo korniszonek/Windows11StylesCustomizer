@@ -1,6 +1,16 @@
 #include <windows.h>
 #include <iostream>
 #include <tlhelp32.h>
+#include <string>
+#include <vector>
+#include "pch.h" 
+
+using namespace std;
+
+void WSM_Log(const char* msg) {
+    string fullMsg = WSM_LOG_PREFIX + string(msg);
+    OutputDebugStringA(fullMsg.c_str());
+}
 
 DWORD GetExplorerPid() {
     DWORD pid = 0;
@@ -20,43 +30,53 @@ DWORD GetExplorerPid() {
     return pid;
 }
 
-using namespace std;
-
 int main() {
     DWORD processId = GetExplorerPid();
     if (processId == 0) {
-        cerr << "Explorer.exe process ID not found!" << endl;
+        WSM_Log("Explorer.exe process ID not found!");
         return 1;
     }
 
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
     if (hProcess == NULL) {
-        cerr << "OpenProcess failed! Error code: " << GetLastError() << endl;
+        WSM_Log("OpenProcess failed!");
         return 1;
     }
 
-    const char* dllPath = R"(C:\Users\uszat\Documents\projekty\WindowsStylesManipulator\DllWindowsTaskbar\x64\Debug\DllWindowsTaskbar.dll)";
-    LPVOID pRemoteMem = VirtualAllocEx(hProcess, NULL, strlen(dllPath) + 1, MEM_COMMIT, PAGE_READWRITE);
+    WCHAR fullPath[MAX_PATH];
+    GetFullPathName(L"DllWindowsTaskbar.dll", MAX_PATH, fullPath, NULL);
+    wstring finalDllPath = fullPath;
+
+    size_t pathSize = (finalDllPath.length() + 1) * sizeof(WCHAR);
+    LPVOID pRemoteMem = VirtualAllocEx(hProcess, NULL, pathSize, MEM_COMMIT, PAGE_READWRITE);
+
     if (pRemoteMem == NULL) {
-        cerr << "VirtualAllocEx failed! Error code: " << GetLastError() << endl;
+        WSM_Log("VirtualAllocEx failed!");
         CloseHandle(hProcess);
         return 1;
     }
 
-    if (!WriteProcessMemory(hProcess, pRemoteMem, dllPath, strlen(dllPath) + 1, NULL)) {
-        cerr << "WriteProcessMemory failed! Error code: " << GetLastError() << endl;
+    if (!WriteProcessMemory(hProcess, pRemoteMem, finalDllPath.c_str(), pathSize, NULL)) {
+        WSM_Log("WriteProcessMemory failed!");
         VirtualFreeEx(hProcess, pRemoteMem, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         return 1;
     }
 
-    PTHREAD_START_ROUTINE pLoadLibrary = (PTHREAD_START_ROUTINE)GetProcAddress(GetModuleHandle(L"kernel32.dll"), "LoadLibraryA");
+    PTHREAD_START_ROUTINE pLoadLibrary = (PTHREAD_START_ROUTINE)GetProcAddress(GetModuleHandle(L"kernel32.dll"), "LoadLibraryW");
     HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, pLoadLibrary, pRemoteMem, 0, NULL);
+
     if (hThread == NULL) {
-        cerr << "CreateRemoteThread failed! Error code: " << GetLastError() << endl;
+        WSM_Log("CreateRemoteThread failed!");
     }
     else {
-        cout << "DLL injected successfully!" << endl;
+        WaitForSingleObject(hThread, 2000);
+        DWORD exitCode = 0;
+        GetExitCodeThread(hThread, &exitCode);
+
+        string logMsg = "Thread finished with code: " + to_string(exitCode);
+        WSM_Log(logMsg.c_str());
+
         CloseHandle(hThread);
     }
 

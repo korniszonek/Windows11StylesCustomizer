@@ -1,29 +1,82 @@
-﻿/*
-*  ProcessCommand - Processing command from pipe (atm only checks if piping works)
-*  PipeServer - connecting pipe to dll  
-*  FindTaskbar - looking for a taskbar HWND item inside an explorer - when found -> assign it to hTaskbar 
-*  ApplyTestEffect - check to see how real changes work - a final exam to verify FindTaskbar method 
+﻿/* 
+    ProcessCommand - Processing command from pipe (atm only checks if piping works)
+    PipeServer - connecting pipe to dll
+    FindTaskbar - looking for a taskbar HWND item inside an explorer - when found -> assign it to hTaskbar
+    LoadLogic - loading logic of nonSystem used dll
 */
 #include "pch.h"
 #include <dwmapi.h>
 #include <cstdio>
 #include <thread>
 #include <sddl.h>
+#include <mutex>
+#include <string>
 
 #pragma comment(lib, "dwmapi.lib")
+
 #define PIPE_NAME L"\\\\.\\pipe\\WSM"
 
+using namespace std;
 
+HMODULE hLogicModule = NULL;
+mutex logicMutex;
 SECURITY_ATTRIBUTES sa;
 bool saInitialized = false;
-
 HWND hTaskbar = NULL;
+
+std::wstring GetLogicPath() {
+    WCHAR path[MAX_PATH];
+    HMODULE hm = NULL;
+
+    if (GetModuleHandleEx(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        (LPCWSTR)&GetLogicPath,
+        &hm))
+    {
+        GetModuleFileName(hm, path, MAX_PATH);
+    }
+
+    wstring strPath = path;
+    size_t pos = strPath.find_last_of(L"\\/");
+    return strPath.substr(0, pos + 1) + L"taskbarLogic.dll";
+}
+
+
+
+/* Spliting logic and process of injecting changes
+    allows to avoid a need to recompiling system used dll(master dll) on every code change(which means a need to kill / reload the explorer process every time) - we
+    keep our dll orchestrator alive and recompile logic.file which is only used by master dll, not a system process
+*/
+void LoadLogic() {
+    lock_guard<mutex> lock(logicMutex);
+    /* we are using guard to avoid race condition -
+        we use pipe server to reload logic wcich is an independent service.
+        if master dll is curently Freeing libary and pipe server is loading new logic it will
+        prevent a crash caused by a modifing a delated memory
+    */
+    if (hLogicModule) {
+        FreeLibrary(hLogicModule);
+        hLogicModule = NULL;
+    }
+    wstring path = GetLogicPath();
+    string pathStr(path.begin(), path.end());
+
+    WSM_Log(("Core: Trying to load: " + pathStr).c_str());
+
+    hLogicModule = LoadLibrary(path.c_str());
+
+    if (!hLogicModule) {
+        WSM_Log("Core: Failed to load Logic.dll!");
+    }
+    else {
+        WSM_Log("Core: Logic.dll loaded successfully!");
+    }
+}
 
 BOOL CALLBACK FindTaskbar(HWND hwnd, LPARAM lParam) {
     WCHAR className[256];
-    GetClassName(hwnd, className, 256); 
-    /* 
-    according to MSDN maximal length of classNames inside windows architeture is 256 in most cases(*2 caused by WCHAR size = 512 bytes in memory)
+    GetClassName(hwnd, className, 256);
+    /* according to MSDN maximal length of classNames inside windows architeture is 256 in most cases(*2 caused by WCHAR size = 512 bytes in memory)
         we want to use as little amounts of memory as possible to keep system unaffected
     */
     if (wcscmp(className, L"Shell_TrayWnd") == 0) {
@@ -33,35 +86,24 @@ BOOL CALLBACK FindTaskbar(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-void ApplyTestEffect(HWND hwnd) {
-    if (!hwnd) {
+void ProcessCommand(const char* command) {
+    if (strcmp(command, "RELOAD") == 0) {
+        LoadLogic();
         return;
     }
-    RECT rect;
-    GetWindowRect(hwnd, &rect);
-    int width = rect.right - rect.left; 
-        /* 
-        we need to oparate on right - left instead of only right like in normal graph libary
-            - in case of user having 2 monitors or more starting
-            for example 2x 1920x1080 points are both starting - 0 and 1920 ending -  1920 and 3840 - using only right would cause incorrect rendering     
-        */
-    int height = rect.bottom - rect.top;
-
-    HRGN hRgn = CreateRoundRectRgn(0, 0, width, height, 40, 40); // 40,40 - radius
-    SetWindowRgn(hTaskbar, hRgn, TRUE);
-    DeleteObject(hRgn);
-}
-
-void ProcessCommand(const char* command) {
-    //MessageBoxA(NULL, "PipeServer started inside explorer.exe!", "WinShark Status", MB_OK); -> check
-    if (hTaskbar == NULL) {
-        EnumWindows(FindTaskbar, 0); //stops when return false, otherwise - keep looking
-    } 
-    ApplyTestEffect(hTaskbar);
+    lock_guard<mutex> lock(logicMutex);
+    if (hLogicModule) {
+        typedef void (*LogicFunc)(const char*, HWND);
+        LogicFunc func = (LogicFunc)GetProcAddress(hLogicModule, "ExecuteLogic");
+        if (func) {
+            if (hTaskbar != NULL) {
+                func(command, hTaskbar);
+            }
+        }
+    }
 }
 
 void PipeServer() {
-    
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.bInheritHandle = FALSE;
     if (ConvertStringSecurityDescriptorToSecurityDescriptor(
@@ -74,7 +116,7 @@ void PipeServer() {
             PIPE_ACCESS_INBOUND,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             1,
-            1024, 1024, 0, 
+            1024, 1024, 0,
             saInitialized ? &sa : NULL
         );
         if (ConnectNamedPipe(hPipe, NULL)) {
@@ -89,13 +131,22 @@ void PipeServer() {
     }
 }
 
-BOOL APIENTRY DllMain( HMODULE hModule,
-                       DWORD  ul_reason_for_call,
-                       LPVOID lpReserved
-                     )
+DWORD WINAPI Initialize(LPVOID lpParam) {
+    Sleep(500);
+    EnumWindows(FindTaskbar, 0);
+    LoadLogic();
+    PipeServer();
+    return 0;
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule,
+    DWORD  ul_reason_for_call,
+    LPVOID lpReserved
+)
 {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
-        std::thread(PipeServer).detach(); // pipe working in background, to prevent freezing the process start-up
+        HANDLE hThread = CreateThread(NULL, 0, Initialize, hModule, 0, NULL);
+        if (hThread) CloseHandle(hThread);
     }
     else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
         if (saInitialized && sa.lpSecurityDescriptor) {
@@ -104,4 +155,3 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     }
     return TRUE;
 }
-
