@@ -24,7 +24,7 @@ SECURITY_ATTRIBUTES sa;
 bool saInitialized = false;
 HWND hTaskbar = NULL;
 
-std::wstring GetLogicPath() {
+wstring GetLogicPath() {
     WCHAR path[MAX_PATH];
     HMODULE hm = NULL;
 
@@ -58,12 +58,23 @@ void LoadLogic() {
         FreeLibrary(hLogicModule);
         hLogicModule = NULL;
     }
-    wstring path = GetLogicPath();
-    string pathStr(path.begin(), path.end());
+    wstring originalPath = GetLogicPath();
+    wstring tempPath = originalPath + L".tmp";
 
-    WSM_Log(("Core: Trying to load: " + pathStr).c_str());
+    if (CopyFile(originalPath.c_str(), tempPath.c_str(), FALSE)) {
+        WSM_Log("Core: Logic.dll copied to temp successfully.");
+    }
+    else {
+        WSM_Log("Core: Warning - Could not copy Logic.dll, trying existing temp file.");
+    }
+    string pathStr(tempPath.begin(), tempPath.end());
+    WSM_Log(("Core: Trying to load from temp: " + pathStr).c_str());
 
-    hLogicModule = LoadLibrary(path.c_str());
+    hLogicModule = LoadLibrary(tempPath.c_str());
+
+    if (!hLogicModule) {
+        hLogicModule = LoadLibrary(originalPath.c_str());
+    }
 
     if (!hLogicModule) {
         WSM_Log("Core: Failed to load Logic.dll!");
