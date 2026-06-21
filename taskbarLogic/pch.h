@@ -6,8 +6,7 @@
 
 #ifndef PCH_H
 #define PCH_H
-#include "../Common.h"
 
 #include "framework.h"
-
+#include "../Common.h"
 #endif //PCH_H

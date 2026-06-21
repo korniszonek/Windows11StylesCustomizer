@@ -7,11 +7,6 @@
 
 using namespace std;
 
-void WSM_Log(const char* msg) {
-    string fullMsg = WSM_LOG_PREFIX + string(msg);
-    OutputDebugStringA(fullMsg.c_str());
-}
-
 DWORD GetExplorerPid() {
     DWORD pid = 0;
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
