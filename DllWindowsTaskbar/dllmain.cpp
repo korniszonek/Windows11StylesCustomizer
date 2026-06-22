@@ -23,6 +23,13 @@ mutex logicMutex;
 SECURITY_ATTRIBUTES sa;
 bool saInitialized = false;
 HWND hTaskbar = NULL;
+HWND hIsland = NULL;
+
+struct IRenderer {
+    virtual void OnPaint(HDC hdc, int width, int height) = 0;
+    virtual void OnCommand(const char* cmd) = 0;
+};
+IRenderer* currentRenderer = nullptr;
 
 wstring GetLogicPath() {
     WCHAR path[MAX_PATH];
@@ -107,14 +114,55 @@ void ProcessCommand(const char* command) {
         typedef void (*LogicFunc)(const char*, HWND);
         LogicFunc func = (LogicFunc)GetProcAddress(hLogicModule, "ExecuteLogic");
         if (func) {
-            if (hTaskbar != NULL) {
-                func(command, hTaskbar);
-            }
+            HWND target = hIsland ? hIsland : hTaskbar;
+            func(command, target);
         }
     }
 }
+LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        if (currentRenderer) {
+            currentRenderer->OnPaint(hdc, 400, 60);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_USER + 100: {}
+   
+    case WM_CLOSE: DestroyWindow(hwnd); return 0;
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+HWND CreateIslandWindow(HINSTANCE hInstance) {
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX) };
+    wc.lpfnWndProc = IslandProc; //simple functions handler attribute
+    wc.hInstance = hInstance;
+    wc.lpszClassName = L"TaskbarIslandClass";
+    RegisterClassEx(&wc);
 
-void PipeServer() {
+    HWND hwnd = CreateWindowEx(
+        //attributes
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        L"TaskbarIslandClass", L"Island",
+        WS_POPUP | WS_VISIBLE,
+        500, 1000, 400, 60, //position and size (x, y, width, height)
+        NULL, NULL, hInstance, NULL
+    );
+
+    //DWM styles and prefetences
+    int preference = 2; //Round 33
+    DwmSetWindowAttribute(hwnd, 33, &preference, sizeof(preference));
+
+    int backdrop = 2; //Mica acrylic 19
+    DwmSetWindowAttribute(hwnd, 19, &backdrop, sizeof(backdrop));
+
+    return hwnd;
+}
+
+DWORD WINAPI PipeServer(LPVOID lpParam) {
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.bInheritHandle = FALSE;
     if (ConvertStringSecurityDescriptorToSecurityDescriptor(
@@ -140,13 +188,29 @@ void PipeServer() {
         DisconnectNamedPipe(hPipe);
         CloseHandle(hPipe);
     }
+    return 0;
 }
 
 DWORD WINAPI Initialize(LPVOID lpParam) {
-    Sleep(500);
+    Sleep(1000);
     EnumWindows(FindTaskbar, 0);
+    HINSTANCE hInstance = (HINSTANCE)lpParam;
+    if (hTaskbar) {
+        ShowWindow(hTaskbar, SW_HIDE);
+        WSM_Log("Core: System Taskbar hidden.");
+        
+        hIsland = CreateIslandWindow(hInstance);
+        WSM_Log("Core: Island Window created.");
+    }
     LoadLogic();
-    PipeServer();
+    HANDLE hPipeThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)PipeServer, NULL, 0, NULL);
+    if (hPipeThread) CloseHandle(hPipeThread);
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
     return 0;
 }
 
@@ -156,7 +220,7 @@ BOOL APIENTRY DllMain(HMODULE hModule,
 )
 {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
-        HANDLE hThread = CreateThread(NULL, 0, Initialize, hModule, 0, NULL);
+        HANDLE hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)Initialize, hModule, 0, NULL);
         if (hThread) CloseHandle(hThread);
     }
     else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
