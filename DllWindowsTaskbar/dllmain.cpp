@@ -11,13 +11,13 @@
 #include <sddl.h>
 #include <mutex>
 #include <string>
-
 #pragma comment(lib, "dwmapi.lib")
 
 #define PIPE_NAME L"\\\\.\\pipe\\WSM"
 
 using namespace std;
 
+EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 HMODULE hLogicModule = NULL;
 mutex logicMutex;
 SECURITY_ATTRIBUTES sa;
@@ -25,11 +25,8 @@ bool saInitialized = false;
 HWND hTaskbar = NULL;
 HWND hIsland = NULL;
 
-struct IRenderer {
-    virtual void OnPaint(HDC hdc, int width, int height) = 0;
-    virtual void OnCommand(const char* cmd) = 0;
-};
-IRenderer* currentRenderer = nullptr;
+HMODULE hStyleModule = NULL;
+IRenderer* g_Renderer = nullptr;
 
 wstring GetLogicPath() {
     WCHAR path[MAX_PATH];
@@ -90,6 +87,44 @@ void LoadLogic() {
         WSM_Log("Core: Logic.dll loaded successfully!");
     }
 }
+void LoadStyle(wstring styleName) {
+    if (g_Renderer) {
+        delete g_Renderer;
+        g_Renderer = nullptr;
+    }
+    if (hStyleModule) {
+        FreeLibrary(hStyleModule);
+        hStyleModule = NULL;
+    }
+
+    WCHAR dllPath[MAX_PATH];
+    GetModuleFileName((HMODULE)&__ImageBase, dllPath, MAX_PATH);
+    wstring strPath = dllPath;
+    size_t pos = strPath.find_last_of(L"\\/");
+    wstring baseDir = strPath.substr(0, pos + 1);
+
+    wstring fullPath = baseDir + L"Styles\\" + styleName + L".dll";
+
+    HMODULE hStyle = LoadLibrary(fullPath.c_str());
+    if (!hStyle) {
+        WSM_Log("Core: Failed to load style DLL!");
+        return;
+    }
+
+    typedef IRenderer* (*CreateRendererFunc)();
+    auto CreateRenderer = (CreateRendererFunc)GetProcAddress(hStyle, "CreateRenderer");
+
+    if (CreateRenderer) {
+        g_Renderer = CreateRenderer();
+        hStyleModule = hStyle;
+        WSM_Log("Core: Style loaded successfully.");
+    }
+    else {
+        WSM_Log("Core: Failed to find CreateRenderer in style DLL!");
+        FreeLibrary(hStyle);
+    }
+}
+
 
 BOOL CALLBACK FindTaskbar(HWND hwnd, LPARAM lParam) {
     WCHAR className[256];
@@ -105,10 +140,25 @@ BOOL CALLBACK FindTaskbar(HWND hwnd, LPARAM lParam) {
 }
 
 void ProcessCommand(const char* command) {
-    if (strcmp(command, "RELOAD") == 0) {
+    string cmdStr(command);
+
+    // Handling File Reload 
+    if (cmdStr == "RELOAD") {
         LoadLogic();
         return;
     }
+
+    // Handling Change of styleFile
+    if (cmdStr.find("STYLE:") == 0) {
+        string styleNameStr = cmdStr.substr(6); //without STYLE:
+        wstring styleNameW(styleNameStr.begin(), styleNameStr.end());
+        
+        LoadStyle(styleNameW);
+        InvalidateRect(hIsland, NULL, TRUE);
+        return;
+    }
+
+    // Handling rest of commands hide, alpha etc.
     lock_guard<mutex> lock(logicMutex);
     if (hLogicModule) {
         typedef void (*LogicFunc)(const char*, HWND);
@@ -119,13 +169,18 @@ void ProcessCommand(const char* command) {
         }
     }
 }
+
 LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_SETCURSOR:{
+        SetCursor(LoadCursor(NULL, IDC_ARROW));
+        return TRUE;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        if (currentRenderer) {
-            currentRenderer->OnPaint(hdc, 400, 60);
+        if (g_Renderer) {
+            g_Renderer->OnPaint(hdc, 400, 60);
         }
         EndPaint(hwnd, &ps);
         return 0;
@@ -136,6 +191,7 @@ LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 HWND CreateIslandWindow(HINSTANCE hInstance) {
     WNDCLASSEX wc = { sizeof(WNDCLASSEX) };
     wc.lpfnWndProc = IslandProc; //simple functions handler attribute
@@ -152,7 +208,7 @@ HWND CreateIslandWindow(HINSTANCE hInstance) {
         NULL, NULL, hInstance, NULL
     );
 
-    //DWM styles and prefetences
+    //DWM styles and preferences
     int preference = 2; //Round 33
     DwmSetWindowAttribute(hwnd, 33, &preference, sizeof(preference));
 
@@ -214,16 +270,16 @@ DWORD WINAPI Initialize(LPVOID lpParam) {
     return 0;
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule,
-    DWORD  ul_reason_for_call,
-    LPVOID lpReserved
-)
-{
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         HANDLE hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)Initialize, hModule, 0, NULL);
         if (hThread) CloseHandle(hThread);
     }
     else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
+        //CleanUp
+        if (g_Renderer) delete g_Renderer;
+        if (hStyleModule) FreeLibrary(hStyleModule);
+
         if (saInitialized && sa.lpSecurityDescriptor) {
             LocalFree(sa.lpSecurityDescriptor);
         }

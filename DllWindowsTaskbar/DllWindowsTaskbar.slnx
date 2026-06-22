@@ -3,6 +3,9 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Folder Name="/Styles/">
+    <Project Path="../PinkCrystal/PinkCrystal.vcxproj" Id="17d75c85-376b-4465-b601-360080dd3601" />
+  </Folder>
   <Project Path="../injector/injector.vcxproj" Id="68681503-71a1-464f-a5f8-13b31aec8f9e">
     <BuildDependency Project="DllWindowsTaskbar.vcxproj" />
   </Project>

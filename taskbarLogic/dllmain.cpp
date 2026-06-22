@@ -100,7 +100,13 @@ extern "C" __declspec(dllexport) void __stdcall ExecuteLogic(const char* command
 
         case CommandType::BLUR: {
             
-            int blurType = std::stoi(value); // 0=None, 1=Blur, 2=Acrylic
+            int blurType = 0;
+            try {
+                blurType = std::stoi(value); // 0=None, 1=Blur, 2=Acrylic
+            }
+            catch (...) {
+                blurType = 0; 
+            } 
             if (blurType < 0) blurType = 0;
             if (blurType > 2) blurType = 2;
 
@@ -144,12 +150,10 @@ extern "C" __declspec(dllexport) void __stdcall ExecuteLogic(const char* command
         } break;
         
         case CommandType::CLEAN: {
-            if (hwnd) {
-                CleanTaskbar(hwnd);
-                WSM_Log("Logic: CleanTaskbar executed.");
-            }
-            else {
-                WSM_Log("Logic: hTaskbar is NULL, cannot clean!");
+            HWND hSysTray = FindWindowW(L"Shell_TrayWnd", NULL);
+            if (hSysTray) {
+                CleanTaskbar(hSysTray);
+                WSM_Log("Logic: CleanTaskbar executed on System Tray.");
             }
         }break;
 
