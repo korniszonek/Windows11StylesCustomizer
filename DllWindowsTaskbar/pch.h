@@ -10,5 +10,4 @@
 // w tym miejscu dodaj nagłówki, które mają być wstępnie kompilowane
 #include "framework.h"
 #include "../Common.h"
-#include "../IRenderer.h"
 #endif //PCH_H

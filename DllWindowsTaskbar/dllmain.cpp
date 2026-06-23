@@ -12,7 +12,7 @@
 #include <mutex>
 #include <string>
 #pragma comment(lib, "dwmapi.lib")
-
+#include "../IRenderer.h"
 #define PIPE_NAME L"\\\\.\\pipe\\WSM"
 
 using namespace std;
@@ -87,6 +87,23 @@ void LoadLogic() {
         WSM_Log("Core: Logic.dll loaded successfully!");
     }
 }
+
+void UpdateIslandPosition() {
+    if (!hIsland || !g_Renderer) return;
+
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
+    int islandWidth = g_Renderer->GetRequiredWidth();
+    int islandHeight = 60;
+
+    int posX = (screenWidth / 2) - (islandWidth / 2);
+    int posY = screenHeight - islandHeight - 40;
+
+    SetWindowPos(hIsland, HWND_TOPMOST, posX, posY, islandWidth, islandHeight, SWP_NOACTIVATE);
+    InvalidateRect(hIsland, NULL, TRUE);
+}
+
 void LoadStyle(wstring styleName) {
     if (g_Renderer) {
         delete g_Renderer;
@@ -117,6 +134,7 @@ void LoadStyle(wstring styleName) {
     if (CreateRenderer) {
         g_Renderer = CreateRenderer();
         hStyleModule = hStyle;
+        UpdateIslandPosition();
         WSM_Log("Core: Style loaded successfully.");
     }
     else {
@@ -124,7 +142,6 @@ void LoadStyle(wstring styleName) {
         FreeLibrary(hStyle);
     }
 }
-
 
 BOOL CALLBACK FindTaskbar(HWND hwnd, LPARAM lParam) {
     WCHAR className[256];
@@ -172,7 +189,7 @@ void ProcessCommand(const char* command) {
 
 LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-    case WM_SETCURSOR:{
+    case WM_SETCURSOR: {
         SetCursor(LoadCursor(NULL, IDC_ARROW));
         return TRUE;
     }
@@ -180,14 +197,24 @@ LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
         if (g_Renderer) {
-            g_Renderer->OnPaint(hdc, 400, 60);
+            RECT r;
+            GetClientRect(hwnd, &r);
+            g_Renderer->OnPaint(hdc, r.right - r.left, r.bottom - r.top);
         }
         EndPaint(hwnd, &ps);
         return 0;
     }
     case WM_USER + 100: {}
-   
+
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
+    case WM_LBUTTONDOWN: {
+        int mouseX = LOWORD(lParam);
+        int mouseY = HIWORD(lParam);
+        if (g_Renderer) {
+            g_Renderer->OnMouseClick(mouseX, mouseY);
+        }
+        return 0;
+    }
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }

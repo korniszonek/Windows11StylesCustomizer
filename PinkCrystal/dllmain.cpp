@@ -10,6 +10,7 @@
 #include <shellapi.h> 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "gdiplus.lib")
+#include "../IRenderer.h"
 using namespace Gdiplus;
 
 struct AppIcon {
@@ -74,6 +75,13 @@ void RefreshApplications() {
     }
     g_AppIcons.clear();
     EnumWindows(EnumWindowsProc, 0);
+
+    std::sort(g_AppIcons.begin(), g_AppIcons.end(), [](const AppIcon& a, const AppIcon& b) {
+        DWORD pidA = 0, pidB = 0;
+        GetWindowThreadProcessId(a.hwndTarget, &pidA);
+        GetWindowThreadProcessId(b.hwndTarget, &pidB);
+        return pidA < pidB;
+        });
 }
 
 class PinkRenderer : public IRenderer {
@@ -146,9 +154,44 @@ public:
             }
         }
     }
+    
+    void OnMouseClick(int x, int y) override {
+        for (const auto& app : g_AppIcons) {
+            if (x >= app.hitBox.left && x <= app.hitBox.right &&
+                y >= app.hitBox.top && y <= app.hitBox.bottom) {
+
+                HWND hwndTarget = app.hwndTarget;
+                if (!IsWindow(hwndTarget)) continue;
+
+                if (IsIconic(hwndTarget)) {
+                    ShowWindow(hwndTarget, SW_RESTORE);
+                    SetForegroundWindow(hwndTarget);
+                }
+                else {
+                    if (GetForegroundWindow() == hwndTarget) {
+                        PostMessageW(hwndTarget, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                    }
+                    else {
+                        SetForegroundWindow(hwndTarget);
+                    }
+                }
+                break; 
+            }
+        }
+    }
 
     void OnCommand(const char* command) override {
 
+    }
+
+    int GetRequiredWidth() override {
+        if (g_AppIcons.empty()) return 100;
+        int iconSize = 32;
+        int padding = 15;
+        int margins = 40;
+        
+        int width = (g_AppIcons.size() * iconSize) + ((g_AppIcons.size() - 1) * padding) + margins;
+        return width;
     }
 };
 
