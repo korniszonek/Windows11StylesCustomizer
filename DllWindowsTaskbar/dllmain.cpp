@@ -28,6 +28,8 @@ HWND hIsland = NULL;
 HMODULE hStyleModule = NULL;
 IRenderer* g_Renderer = nullptr;
 
+UINT g_ShellHookMsg = 0;
+
 wstring GetLogicPath() {
     WCHAR path[MAX_PATH];
     HMODULE hm = NULL;
@@ -98,9 +100,9 @@ void UpdateIslandPosition() {
     int islandHeight = 60;
 
     int posX = (screenWidth / 2) - (islandWidth / 2);
-    int posY = screenHeight - islandHeight - 40;
+    int posY = screenHeight - islandHeight - 10;
 
-    SetWindowPos(hIsland, HWND_TOPMOST, posX, posY, islandWidth, islandHeight, SWP_NOACTIVATE);
+    SetWindowPos(hIsland, HWND_TOPMOST, posX, posY, islandWidth, islandHeight, SWP_NOACTIVATE | SWP_NOCOPYBITS);
     InvalidateRect(hIsland, NULL, TRUE);
 }
 
@@ -188,6 +190,16 @@ void ProcessCommand(const char* command) {
 }
 
 LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == g_ShellHookMsg && g_ShellHookMsg != 0) {
+        // 1 = Window Created, 2 = Window Destroyed, 6 = Redraw 
+        if (wParam == 1 || wParam == 2 || wParam == 6) {
+            if (g_Renderer) {
+                g_Renderer->OnCommand("REFRESH");
+                UpdateIslandPosition();
+            }
+        }
+        return 0;
+    }
     switch (msg) {
     case WM_SETCURSOR: {
         SetCursor(LoadCursor(NULL, IDC_ARROW));
@@ -197,15 +209,13 @@ LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
         if (g_Renderer) {
-            RECT r;
-            GetClientRect(hwnd, &r);
-            g_Renderer->OnPaint(hdc, r.right - r.left, r.bottom - r.top);
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+            g_Renderer->OnPaint(hdc, rect.right - rect.left, rect.bottom - rect.top);
         }
         EndPaint(hwnd, &ps);
         return 0;
     }
-    case WM_USER + 100: {}
-
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
     case WM_LBUTTONDOWN: {
         int mouseX = LOWORD(lParam);
@@ -242,6 +252,9 @@ HWND CreateIslandWindow(HINSTANCE hInstance) {
     int backdrop = 2; //Mica acrylic 19
     DwmSetWindowAttribute(hwnd, 19, &backdrop, sizeof(backdrop));
 
+    BOOL disableTransitions = TRUE;
+    DwmSetWindowAttribute(hwnd, 3, &disableTransitions, sizeof(disableTransitions)); // DWMWA_DISALLOW_PEEK
+
     return hwnd;
 }
 
@@ -274,6 +287,8 @@ DWORD WINAPI PipeServer(LPVOID lpParam) {
     return 0;
 }
 
+
+
 DWORD WINAPI Initialize(LPVOID lpParam) {
     Sleep(1000);
     EnumWindows(FindTaskbar, 0);
@@ -281,9 +296,19 @@ DWORD WINAPI Initialize(LPVOID lpParam) {
     if (hTaskbar) {
         ShowWindow(hTaskbar, SW_HIDE);
         WSM_Log("Core: System Taskbar hidden.");
-        
+
         hIsland = CreateIslandWindow(hInstance);
         WSM_Log("Core: Island Window created.");
+
+        typedef BOOL(WINAPI* RegisterShellHookWindowFunc)(HWND);
+        HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+        if (hUser32) {
+            auto RegisterShellHookWindow = (RegisterShellHookWindowFunc)GetProcAddress(hUser32, "RegisterShellHookWindow");
+            if (RegisterShellHookWindow) {
+                RegisterShellHookWindow(hIsland);
+                g_ShellHookMsg = RegisterWindowMessageW(L"SHELLHOOK");
+            }
+        }
     }
     LoadLogic();
     HANDLE hPipeThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)PipeServer, NULL, 0, NULL);
