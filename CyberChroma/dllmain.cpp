@@ -41,7 +41,7 @@ Gdiplus::Bitmap* CreateBitmapFromHICON_Secure(HICON hIcon) {
 
     HDC hdc = GetDC(NULL);
 
-    // Force 32 bit format with alpha channel
+    // we force 32 bit format with alpha chanel to eliminate black squares
     BITMAPINFO bmi = { 0 };
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = width;
@@ -166,7 +166,6 @@ void RefreshApplications() {
     }
     g_AppIcons.clear();
 
-    // Injected Vector Start Button
     AppIcon startApp;
     startApp.hwndTarget = NULL;
     startApp.hIcon = NULL;
@@ -188,51 +187,56 @@ void RefreshApplications() {
         });
 }
 
-class PinkRenderer : public IRenderer {
+class CyberRenderer : public IRenderer {
     ULONG_PTR gdiplusToken;
     GraphicsPath* path = nullptr;
-    LinearGradientBrush* glassBrush = nullptr;
+    SolidBrush* baseBrush = nullptr;
+    LinearGradientBrush* borderBrush = nullptr;
     SolidBrush* startBrush = nullptr;
     Pen* borderPen = nullptr;
     int lastW = 0, lastH = 0;
 
     void EnsureResources(int w, int h) {
         if (w != lastW || h != lastH) {
-            if (glassBrush) delete glassBrush;
+            if (baseBrush) delete baseBrush;
+            if (borderBrush) delete borderBrush;
             if (startBrush) delete startBrush;
             if (borderPen) delete borderPen;
             if (path) delete path;
 
             path = new GraphicsPath();
-            int radius = 24;
+            int radius = 12; 
             path->AddArc(0, 0, radius, radius, 180, 90);
             path->AddArc(w - radius, 0, radius, radius, 270, 90);
             path->AddArc(w - radius, h - radius, radius, radius, 0, 90);
             path->AddArc(0, h - radius, radius, radius, 90, 90);
             path->CloseFigure();
 
-            glassBrush = new LinearGradientBrush(
-                Point(0, 0), Point(0, h),
-                Color(180, 255, 240, 245), 
-                Color(140, 255, 182, 193)  
-            );
+            baseBrush = new SolidBrush(Color(220, 13, 16, 25));
 
-            borderPen = new Pen(Color(110, 255, 255, 255), 1.0f);
-            startBrush = new SolidBrush(Color(230, 255, 255, 255));
+            borderBrush = new LinearGradientBrush(
+                Point(0, 0), Point(w, h),
+                Color(255, 0, 240, 255), // Cyber Cyan
+                Color(255, 255, 0, 128)  // Neon Pink/Magenta
+            );
+            borderPen = new Pen(borderBrush, 1.5f);
+
+            startBrush = new SolidBrush(Color(255, 0, 240, 255));
 
             lastW = w; lastH = h;
         }
     }
 
 public:
-    PinkRenderer() {
+    CyberRenderer() {
         GdiplusStartupInput gdiplusStartupInput;
         GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
         RefreshApplications();
     }
 
-    ~PinkRenderer() {
-        if (glassBrush) delete glassBrush;
+    ~CyberRenderer() {
+        if (baseBrush) delete baseBrush;
+        if (borderBrush) delete borderBrush;
         if (startBrush) delete startBrush;
         if (borderPen) delete borderPen;
         if (path) delete path;
@@ -253,14 +257,14 @@ public:
         graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
         graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
 
-        graphics.FillPath(glassBrush, path);
+        graphics.FillPath(baseBrush, path);
         graphics.DrawPath(borderPen, path);
 
         std::lock_guard<std::mutex> lock(g_AppsMutex);
 
-        int startX = 26;
+        int startX = 22;
         int iconSize = 32;
-        int padding = 18;
+        int padding = 16;
         int posY = (height - iconSize) / 2;
 
         for (size_t i = 0; i < g_AppIcons.size(); ++i) {
@@ -331,8 +335,8 @@ public:
     int GetRequiredWidth() override {
         if (g_AppIcons.empty()) return 100;
         int iconSize = 32;
-        int padding = 18;
-        int margins = 52;
+        int padding = 16;
+        int margins = 44;
 
         int width = (g_AppIcons.size() * iconSize) + ((g_AppIcons.size() - 1) * padding) + margins;
         return width;
@@ -340,5 +344,5 @@ public:
 };
 
 extern "C" __declspec(dllexport) IRenderer* CreateRenderer() {
-    return new PinkRenderer();
+    return new CyberRenderer();
 }

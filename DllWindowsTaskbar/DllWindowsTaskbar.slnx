@@ -4,7 +4,9 @@
     <Platform Name="x86" />
   </Configurations>
   <Folder Name="/Styles/">
+    <Project Path="../CyberChroma/CyberChroma.vcxproj" Id="79d259b1-7969-40b1-809c-15f7e5bf2f9b" />
     <Project Path="../PinkCrystal/PinkCrystal.vcxproj" Id="17d75c85-376b-4465-b601-360080dd3601" />
+    <Project Path="../PureMinimal/PureMinimal.vcxproj" Id="34af06b3-79be-48a6-9226-825eb952acef" />
   </Folder>
   <Project Path="../injector/injector.vcxproj" Id="68681503-71a1-464f-a5f8-13b31aec8f9e">
     <BuildDependency Project="DllWindowsTaskbar.vcxproj" />

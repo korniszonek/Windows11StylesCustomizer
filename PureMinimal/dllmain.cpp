@@ -13,7 +13,6 @@
 #include <mutex>
 #include <dwmapi.h>
 #pragma comment(lib, "dwmapi.lib")
-
 using namespace Gdiplus;
 
 struct AppIcon {
@@ -41,7 +40,7 @@ Gdiplus::Bitmap* CreateBitmapFromHICON_Secure(HICON hIcon) {
 
     HDC hdc = GetDC(NULL);
 
-    // Force 32 bit format with alpha channel
+    // we force 32 bit format with alpha chanel to eliminate black squares - which are hard to convert into alpha
     BITMAPINFO bmi = { 0 };
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = width;
@@ -50,11 +49,14 @@ Gdiplus::Bitmap* CreateBitmapFromHICON_Secure(HICON hIcon) {
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
+    // allocation space in ram for icons
     std::vector<DWORD> pixels(width * height);
 
     GetDIBits(hdc, iconInfo.hbmColor, 0, height, pixels.data(), &bmi, DIB_RGB_COLORS);
     ReleaseDC(NULL, hdc);
 
+    // check of alpha chanel
+    // if alpha = 0 then its posibly 24 bit icon
     bool hasAlpha = false;
     for (int i = 0; i < width * height; ++i) {
         if ((pixels[i] & 0xFF000000) != 0) {
@@ -63,6 +65,7 @@ Gdiplus::Bitmap* CreateBitmapFromHICON_Secure(HICON hIcon) {
         }
     }
 
+    // alpha by hand for 32 bit format
     if (!hasAlpha && bmColor.bmBitsPixel == 32) {
         for (int i = 0; i < width * height; ++i) {
             pixels[i] |= 0xFF000000;
@@ -80,6 +83,7 @@ Gdiplus::Bitmap* CreateBitmapFromHICON_Secure(HICON hIcon) {
         finalBitmap->UnlockBits(&bmpData);
     }
 
+    // cleanup
     if (iconInfo.hbmColor) DeleteObject(iconInfo.hbmColor);
     if (iconInfo.hbmMask) DeleteObject(iconInfo.hbmMask);
 
@@ -98,6 +102,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     int length = GetWindowTextLengthW(hwnd);
     if (length == 0) return TRUE;
 
+    // for UWP process filter
     wchar_t className[256];
     if (GetClassNameW(hwnd, className, 256)) {
         std::wstring cls(className);
@@ -106,6 +111,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
             return TRUE;
         }
 
+        // if its uwp process - mask it
         if (cls == L"ApplicationFrameWindow") {
             int cloaked = 0;
             HRESULT hr = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
@@ -158,6 +164,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
+
 void RefreshApplications() {
     std::lock_guard<std::mutex> lock(g_AppsMutex);
 
@@ -166,7 +173,7 @@ void RefreshApplications() {
     }
     g_AppIcons.clear();
 
-    // Injected Vector Start Button
+    // we are creating empty app icon for windows
     AppIcon startApp;
     startApp.hwndTarget = NULL;
     startApp.hIcon = NULL;
@@ -188,51 +195,46 @@ void RefreshApplications() {
         });
 }
 
-class PinkRenderer : public IRenderer {
+class MinimalRenderer : public IRenderer {
     ULONG_PTR gdiplusToken;
     GraphicsPath* path = nullptr;
-    LinearGradientBrush* glassBrush = nullptr;
+    SolidBrush* baseBrush = nullptr;
     SolidBrush* startBrush = nullptr;
     Pen* borderPen = nullptr;
     int lastW = 0, lastH = 0;
 
     void EnsureResources(int w, int h) {
         if (w != lastW || h != lastH) {
-            if (glassBrush) delete glassBrush;
+            if (baseBrush) delete baseBrush;
             if (startBrush) delete startBrush;
             if (borderPen) delete borderPen;
             if (path) delete path;
 
             path = new GraphicsPath();
-            int radius = 24;
+            int radius = 8;
             path->AddArc(0, 0, radius, radius, 180, 90);
             path->AddArc(w - radius, 0, radius, radius, 270, 90);
             path->AddArc(w - radius, h - radius, radius, radius, 0, 90);
             path->AddArc(0, h - radius, radius, radius, 90, 90);
             path->CloseFigure();
 
-            glassBrush = new LinearGradientBrush(
-                Point(0, 0), Point(0, h),
-                Color(180, 255, 240, 245), 
-                Color(140, 255, 182, 193)  
-            );
-
-            borderPen = new Pen(Color(110, 255, 255, 255), 1.0f);
-            startBrush = new SolidBrush(Color(230, 255, 255, 255));
+            baseBrush = new SolidBrush(Color(195, 28, 28, 28));
+            borderPen = new Pen(Color(45, 255, 255, 255), 1.0f);
+            startBrush = new SolidBrush(Color(255, 255, 255, 255));
 
             lastW = w; lastH = h;
         }
     }
 
 public:
-    PinkRenderer() {
+    MinimalRenderer() {
         GdiplusStartupInput gdiplusStartupInput;
         GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
         RefreshApplications();
     }
 
-    ~PinkRenderer() {
-        if (glassBrush) delete glassBrush;
+    ~MinimalRenderer() {
+        if (baseBrush) delete baseBrush;
         if (startBrush) delete startBrush;
         if (borderPen) delete borderPen;
         if (path) delete path;
@@ -253,22 +255,24 @@ public:
         graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
         graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
 
-        graphics.FillPath(glassBrush, path);
+        graphics.FillPath(baseBrush, path);
         graphics.DrawPath(borderPen, path);
 
         std::lock_guard<std::mutex> lock(g_AppsMutex);
 
-        int startX = 26;
+        int startX = 16;
         int iconSize = 32;
-        int padding = 18;
+        int padding = 14;
         int posY = (height - iconSize) / 2;
 
         for (size_t i = 0; i < g_AppIcons.size(); ++i) {
             if (g_AppIcons[i].isStartButton) {
-                int s = iconSize;
-                int half = s / 2;
-                int gap = 2;
+                // drawing win 11 logo
+                int s = iconSize; // 32
+                int half = s / 2; // 16
+                int gap = 2;      // space between
 
+                // Rects
                 graphics.FillRectangle(startBrush, startX, posY, half - gap, half - gap);
                 graphics.FillRectangle(startBrush, startX + half, posY, half - gap, half - gap);
                 graphics.FillRectangle(startBrush, startX, posY + half, half - gap, half - gap);
@@ -331,8 +335,8 @@ public:
     int GetRequiredWidth() override {
         if (g_AppIcons.empty()) return 100;
         int iconSize = 32;
-        int padding = 18;
-        int margins = 52;
+        int padding = 14;
+        int margins = 32;
 
         int width = (g_AppIcons.size() * iconSize) + ((g_AppIcons.size() - 1) * padding) + margins;
         return width;
@@ -340,5 +344,5 @@ public:
 };
 
 extern "C" __declspec(dllexport) IRenderer* CreateRenderer() {
-    return new PinkRenderer();
+    return new MinimalRenderer();
 }
