@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 #include <windows.h>
-
+#include <vector>
 using namespace std;
 
 #define PIPE_NAME L"\\\\.\\pipe\\WSM"
@@ -42,3 +42,4 @@ int main() {
 
     return 0;
 }
+

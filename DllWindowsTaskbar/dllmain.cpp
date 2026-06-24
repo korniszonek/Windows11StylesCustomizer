@@ -10,11 +10,14 @@
 #include <thread>
 #include <sddl.h>
 #include <mutex>
+#include <vector>
+#include <algorithm>
 #include <string>
 #pragma comment(lib, "dwmapi.lib")
 #include "../IRenderer.h"
+#include "../ConfigModel.h"
 #define PIPE_NAME L"\\\\.\\pipe\\WSM"
-
+#include <nlohmann/json.hpp>
 using namespace std;
 
 EXTERN_C IMAGE_DOS_HEADER __ImageBase;
@@ -29,6 +32,9 @@ HMODULE hStyleModule = NULL;
 IRenderer* g_Renderer = nullptr;
 
 UINT g_ShellHookMsg = 0;
+
+DynamicConfig g_Config;
+mutex g_ConfigMutex;
 
 wstring GetLogicPath() {
     WCHAR path[MAX_PATH];
@@ -258,35 +264,103 @@ HWND CreateIslandWindow(HINSTANCE hInstance) {
     return hwnd;
 }
 
-DWORD WINAPI PipeServer(LPVOID lpParam) {
-    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-    sa.bInheritHandle = FALSE;
-    if (ConvertStringSecurityDescriptorToSecurityDescriptor(
-        L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &sa.lpSecurityDescriptor, NULL)) {
-        saInitialized = true;
-    }
+//DWORD WINAPI PipeServer(LPVOID lpParam) {
+//    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+//    sa.bInheritHandle = FALSE;
+//    if (ConvertStringSecurityDescriptorToSecurityDescriptor(
+//        L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &sa.lpSecurityDescriptor, NULL)) {
+//        saInitialized = true;
+//    }
+//    while (true) {
+//        HANDLE hPipe = CreateNamedPipe(
+//            PIPE_NAME,
+//            PIPE_ACCESS_INBOUND,
+//            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+//            1,
+//            1024, 1024, 0,
+//            saInitialized ? &sa : NULL
+//        );
+//        if (ConnectNamedPipe(hPipe, NULL)) {
+//            char buffer[1024] = { 0 };
+//            DWORD bytesRead;
+//            if (ReadFile(hPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
+//                ProcessCommand(buffer);
+//            }
+//        }
+//        DisconnectNamedPipe(hPipe);
+//        CloseHandle(hPipe);
+//    }
+//    return 0;
+//}
+void PipeServerThread(HWND hwndTaskbarWindow) {
+    LPCWSTR pipeName = L"\\\\.\\pipe\\OemTaskbarConfigPipe";
+
     while (true) {
-        HANDLE hPipe = CreateNamedPipe(
-            PIPE_NAME,
+        HANDLE hPipe = CreateNamedPipeW(
+            pipeName,
             PIPE_ACCESS_INBOUND,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
             1,
-            1024, 1024, 0,
-            saInitialized ? &sa : NULL
+            1024 * 4, // output
+            1024 * 4, // input
+            0,
+            NULL
         );
-        if (ConnectNamedPipe(hPipe, NULL)) {
-            char buffer[1024] = { 0 };
-            DWORD bytesRead;
-            if (ReadFile(hPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
-                ProcessCommand(buffer);
+
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            Sleep(1000);
+            continue;
+        }
+
+        BOOL connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+
+        if (connected) {
+            vector<char> buffer(4096);
+            DWORD bytesRead = 0;
+
+            //json readfile
+            if (ReadFile(hPipe, buffer.data(), static_cast<DWORD>(buffer.size() - 1), &bytesRead, NULL)) {
+                buffer[bytesRead] = '\0';
+
+                try {
+                    auto json = nlohmann::json::parse(buffer.data());
+
+                    if (json.contains("command") && json["command"] == "UPDATE_STYle") {
+                        lock_guard<mutex> lock(g_ConfigMutex);
+                        if (json.contains("radius")) g_Config.radius = clamp(int)json["radius"], 0, 40);
+                        if (json.contains("padding")) g_Config.padding = clamp(int)json["padding"], 4, 32);
+                        if (json.contains("iconSize")) g_Config.iconSize = clamp(int)json["iconSize"], 16, 48)
+                        
+                        if (json.contains("radius")) g_Config.radius = clamp(int)json["radius"], 0, 40);
+
+                        if (json.contains("bg_color")) {
+                            auto bg = json["bg_color"];
+                            if (bg.contains("a")) g_Config.bgA = bg["a"];
+                            if (bg.contains("r")) g_Config.bgR = bg["r"];
+                            if (bg.contains("g")) g_Config.bgG = bg["g"];
+                            if (bg.contains("b")) g_Config.bgB = bg["b"];
+                        }
+
+                        if (json.contains("border_color")) {
+                            auto bc = json["border_color"];
+                            if (bc.contains("a")) g_Config.borderA = bc["a"];
+                            if (bc.contains("r")) g_Config.borderR = bc["r"];
+                            if (bc.contains("g")) g_Config.borderG = bc["g"];
+                            if (bc.contains("b")) g_Config.borderB = bc["b"];
+                        }
+                        InvalidateRect(hwndTaskbarWindow, NULL, TRUE);
+
+                    }
+                }
+                catch (const exception& e) {
+                    WSM_Log("Invalid json structure");
+                }
             }
         }
         DisconnectNamedPipe(hPipe);
         CloseHandle(hPipe);
     }
-    return 0;
 }
-
 
 
 DWORD WINAPI Initialize(LPVOID lpParam) {
