@@ -1,5 +1,4 @@
-﻿/* 
-    ProcessCommand - Processing command from pipe (atm only checks if piping works)
+﻿/* ProcessCommand - Processing command from pipe (atm only checks if piping works)
     PipeServer - connecting pipe to dll
     FindTaskbar - looking for a taskbar HWND item inside an explorer - when found -> assign it to hTaskbar
     LoadLogic - loading logic of nonSystem used dll
@@ -16,9 +15,10 @@
 #pragma comment(lib, "dwmapi.lib")
 #include "../IRenderer.h"
 #include "../ConfigModel.h"
-#define PIPE_NAME L"\\\\.\\pipe\\WSM"
 #include <nlohmann/json.hpp>
+
 using namespace std;
+using json = nlohmann::json;
 
 EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 HMODULE hLogicModule = NULL;
@@ -35,6 +35,8 @@ UINT g_ShellHookMsg = 0;
 
 DynamicConfig g_Config;
 mutex g_ConfigMutex;
+
+void UpdateIslandPosition();
 
 wstring GetLogicPath() {
     WCHAR path[MAX_PATH];
@@ -62,7 +64,7 @@ wstring GetLogicPath() {
 void LoadLogic() {
     lock_guard<mutex> lock(logicMutex);
     /* we are using guard to avoid race condition -
-        we use pipe server to reload logic wcich is an independent service.
+        we use pipe server to reload logic which is an independent service.
         if master dll is curently Freeing libary and pipe server is loading new logic it will
         prevent a crash caused by a modifing a delated memory
     */
@@ -102,7 +104,7 @@ void UpdateIslandPosition() {
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
-    int islandWidth = g_Renderer->GetRequiredWidth();
+    int islandWidth = g_Renderer->GetRequiredWidth(g_Config);
     int islandHeight = 60;
 
     int posX = (screenWidth / 2) - (islandWidth / 2);
@@ -177,7 +179,7 @@ void ProcessCommand(const char* command) {
     if (cmdStr.find("STYLE:") == 0) {
         string styleNameStr = cmdStr.substr(6); //without STYLE:
         wstring styleNameW(styleNameStr.begin(), styleNameStr.end());
-        
+
         LoadStyle(styleNameW);
         InvalidateRect(hIsland, NULL, TRUE);
         return;
@@ -214,11 +216,23 @@ LRESULT CALLBACK IslandProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        if (g_Renderer) {
-            RECT rect;
-            GetClientRect(hwnd, &rect);
-            g_Renderer->OnPaint(hdc, rect.right - rect.left, rect.bottom - rect.top);
+
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+
+        DynamicConfig configCopy;
+        {
+            lock_guard<mutex> lock(g_ConfigMutex);
+            configCopy = g_Config;
+            g_Config.isDirty = false;
         }
+
+        if (g_Renderer) {
+            g_Renderer->OnPaint(hdc, width, height, configCopy);
+        }
+
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -264,47 +278,15 @@ HWND CreateIslandWindow(HINSTANCE hInstance) {
     return hwnd;
 }
 
-//DWORD WINAPI PipeServer(LPVOID lpParam) {
-//    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-//    sa.bInheritHandle = FALSE;
-//    if (ConvertStringSecurityDescriptorToSecurityDescriptor(
-//        L"D:P(A;;GA;;;WD)", SDDL_REVISION_1, &sa.lpSecurityDescriptor, NULL)) {
-//        saInitialized = true;
-//    }
-//    while (true) {
-//        HANDLE hPipe = CreateNamedPipe(
-//            PIPE_NAME,
-//            PIPE_ACCESS_INBOUND,
-//            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-//            1,
-//            1024, 1024, 0,
-//            saInitialized ? &sa : NULL
-//        );
-//        if (ConnectNamedPipe(hPipe, NULL)) {
-//            char buffer[1024] = { 0 };
-//            DWORD bytesRead;
-//            if (ReadFile(hPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL)) {
-//                ProcessCommand(buffer);
-//            }
-//        }
-//        DisconnectNamedPipe(hPipe);
-//        CloseHandle(hPipe);
-//    }
-//    return 0;
-//}
-void PipeServerThread(HWND hwndTaskbarWindow) {
-    LPCWSTR pipeName = L"\\\\.\\pipe\\OemTaskbarConfigPipe";
+void PipeServerThread(HWND* phwndIsland) {
+    LPCWSTR pipeName = L"\\\\.\\pipe\\WindowsTaskbarConfigPipe";
 
     while (true) {
         HANDLE hPipe = CreateNamedPipeW(
             pipeName,
             PIPE_ACCESS_INBOUND,
             PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-            1,
-            1024 * 4, // output
-            1024 * 4, // input
-            0,
-            NULL
+            1, 4096, 4096, 0, NULL
         );
 
         if (hPipe == INVALID_HANDLE_VALUE) {
@@ -312,56 +294,64 @@ void PipeServerThread(HWND hwndTaskbarWindow) {
             continue;
         }
 
-        BOOL connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
-
-        if (connected) {
+        if (ConnectNamedPipe(hPipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED) {
             vector<char> buffer(4096);
             DWORD bytesRead = 0;
 
-            //json readfile
             if (ReadFile(hPipe, buffer.data(), static_cast<DWORD>(buffer.size() - 1), &bytesRead, NULL)) {
                 buffer[bytesRead] = '\0';
 
-                try {
-                    auto json = nlohmann::json::parse(buffer.data());
-
-                    if (json.contains("command") && json["command"] == "UPDATE_STYle") {
-                        lock_guard<mutex> lock(g_ConfigMutex);
-                        if (json.contains("radius")) g_Config.radius = clamp(int)json["radius"], 0, 40);
-                        if (json.contains("padding")) g_Config.padding = clamp(int)json["padding"], 4, 32);
-                        if (json.contains("iconSize")) g_Config.iconSize = clamp(int)json["iconSize"], 16, 48)
-                        
-                        if (json.contains("radius")) g_Config.radius = clamp(int)json["radius"], 0, 40);
-
-                        if (json.contains("bg_color")) {
-                            auto bg = json["bg_color"];
-                            if (bg.contains("a")) g_Config.bgA = bg["a"];
-                            if (bg.contains("r")) g_Config.bgR = bg["r"];
-                            if (bg.contains("g")) g_Config.bgG = bg["g"];
-                            if (bg.contains("b")) g_Config.bgB = bg["b"];
-                        }
-
-                        if (json.contains("border_color")) {
-                            auto bc = json["border_color"];
-                            if (bc.contains("a")) g_Config.borderA = bc["a"];
-                            if (bc.contains("r")) g_Config.borderR = bc["r"];
-                            if (bc.contains("g")) g_Config.borderG = bc["g"];
-                            if (bc.contains("b")) g_Config.borderB = bc["b"];
-                        }
-                        InvalidateRect(hwndTaskbarWindow, NULL, TRUE);
-
-                    }
+                string rawCmd(buffer.data());
+                if (rawCmd == "RELOAD" || rawCmd.find("STYLE:") == 0) {
+                    ProcessCommand(buffer.data());
                 }
-                catch (const exception& e) {
-                    WSM_Log("Invalid json structure");
+                else {
+                    try {
+                        auto data = json::parse(buffer.data());
+
+                        if (data.contains("command") && data["command"] == "UPDATE_STYLE") {
+                            {
+                                lock_guard<mutex> lock(g_ConfigMutex);
+
+                                // if some value is not declared it remains unchanged
+                                // we use clamp to prevent incorect value - instead we round them to the clostest, by using clamp
+                                g_Config.radius = clamp((int)data.value("radius", g_Config.radius), 0, 50);
+                                g_Config.padding = clamp((int)data.value("padding", g_Config.padding), 2, 40);
+                                g_Config.iconSize = clamp((int)data.value("iconSize", g_Config.iconSize), 16, 64);
+
+                                if (data.contains("bg_color")) {
+                                    auto bg = data["bg_color"];
+                                    g_Config.bgA = bg.value("a", g_Config.bgA);
+                                    g_Config.bgR = bg.value("r", g_Config.bgR);
+                                    g_Config.bgG = bg.value("g", g_Config.bgG);
+                                    g_Config.bgB = bg.value("b", g_Config.bgB);
+                                }
+
+                                if (data.contains("border_color")) {
+                                    auto bc = data["border_color"];
+                                    g_Config.borderA = bc.value("a", g_Config.borderA);
+                                    g_Config.borderR = bc.value("r", g_Config.borderR);
+                                    g_Config.borderG = bc.value("g", g_Config.borderG);
+                                    g_Config.borderB = bc.value("b", g_Config.borderB);
+                                }
+
+                                g_Config.isDirty = true;
+                            }
+
+                            UpdateIslandPosition();
+                        }
+                    }
+                    catch (const exception&) {
+                        WSM_Log("Incorrect Json or Command Format");
+                    }
                 }
             }
         }
+
         DisconnectNamedPipe(hPipe);
         CloseHandle(hPipe);
     }
 }
-
 
 DWORD WINAPI Initialize(LPVOID lpParam) {
     Sleep(1000);
@@ -385,8 +375,10 @@ DWORD WINAPI Initialize(LPVOID lpParam) {
         }
     }
     LoadLogic();
-    HANDLE hPipeThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)PipeServer, NULL, 0, NULL);
-    if (hPipeThread) CloseHandle(hPipeThread);
+    UpdateIslandPosition();
+
+    thread(PipeServerThread, &hIsland).detach();
+
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
@@ -402,7 +394,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         if (hThread) CloseHandle(hThread);
     }
     else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
-        //CleanUp
         if (g_Renderer) delete g_Renderer;
         if (hStyleModule) FreeLibrary(hStyleModule);
 

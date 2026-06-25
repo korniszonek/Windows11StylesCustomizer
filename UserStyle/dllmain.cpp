@@ -6,22 +6,23 @@
 #include <vector>
 #include <gdiplus.h>
 #include <shellapi.h> 
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "gdiplus.lib")
-#include "../IRenderer.h"
-#include <string>
 #include <mutex>
 #include <dwmapi.h>
+
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "dwmapi.lib")
+
+#include "../IRenderer.h" 
 
 using namespace Gdiplus;
 
 struct AppIcon {
-    HWND hwndTarget;      // real target icon
-    HICON hIcon;          // winApi icon
-    Gdiplus::Bitmap* bmp; // bitmap gdi+
-    RECT hitBox;          // positon (x,y, width,height)
-    bool isStartButton;   // flag to identify the Windows Start button
+    HWND hwndTarget;
+    HICON hIcon;
+    Gdiplus::Bitmap* bmp;
+    RECT hitBox;
+    bool isStartButton;
 };
 
 std::vector<AppIcon> g_AppIcons;
@@ -41,7 +42,7 @@ Gdiplus::Bitmap* CreateBitmapFromHICON_Secure(HICON hIcon) {
 
     HDC hdc = GetDC(NULL);
 
-    // we force 32 bit format with alpha chanel to eliminate black squares
+    // Force 32 bit format with alpha channel
     BITMAPINFO bmi = { 0 };
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = width;
@@ -166,6 +167,7 @@ void RefreshApplications() {
     }
     g_AppIcons.clear();
 
+    // Injected Vector Start Button
     AppIcon startApp;
     startApp.hwndTarget = NULL;
     startApp.hIcon = NULL;
@@ -187,56 +189,47 @@ void RefreshApplications() {
         });
 }
 
-class CyberRenderer : public IRenderer {
+class UserPresetRenderer : public IRenderer {
     ULONG_PTR gdiplusToken;
     GraphicsPath* path = nullptr;
     SolidBrush* baseBrush = nullptr;
-    LinearGradientBrush* borderBrush = nullptr;
     SolidBrush* startBrush = nullptr;
     Pen* borderPen = nullptr;
     int lastW = 0, lastH = 0;
 
-    void EnsureResources(int w, int h) {
-        if (w != lastW || h != lastH) {
+    void EnsureResources(int w, int h, const DynamicConfig& config) {
+        if (w != lastW || h != lastH || config.isDirty) {
             if (baseBrush) delete baseBrush;
-            if (borderBrush) delete borderBrush;
             if (startBrush) delete startBrush;
             if (borderPen) delete borderPen;
             if (path) delete path;
 
             path = new GraphicsPath();
-            int radius = 12; 
-            path->AddArc(0, 0, radius, radius, 180, 90);
-            path->AddArc(w - radius, 0, radius, radius, 270, 90);
-            path->AddArc(w - radius, h - radius, radius, radius, 0, 90);
-            path->AddArc(0, h - radius, radius, radius, 90, 90);
+            int r = config.radius; 
+            path->AddArc(0, 0, r, r, 180, 90);
+            path->AddArc(w - r, 0, r, r, 270, 90);
+            path->AddArc(w - r, h - r, r, r, 0, 90);
+            path->AddArc(0, h - r, r, r, 90, 90);
             path->CloseFigure();
 
-            baseBrush = new SolidBrush(Color(220, 13, 16, 25));
+            baseBrush = new SolidBrush(Color(config.bgA, config.bgR, config.bgG, config.bgB));
+            borderPen = new Pen(Color(config.borderA, config.borderR, config.borderG, config.borderB), 1.0f);
 
-            borderBrush = new LinearGradientBrush(
-                Point(0, 0), Point(w, h),
-                Color(255, 0, 240, 255), // Cyber Cyan
-                Color(255, 255, 0, 128)  // Neon Pink/Magenta
-            );
-            borderPen = new Pen(borderBrush, 1.5f);
-
-            startBrush = new SolidBrush(Color(255, 0, 240, 255));
+            startBrush = new SolidBrush(Color(config.borderA, config.borderR, config.borderG, config.borderB));
 
             lastW = w; lastH = h;
         }
     }
 
 public:
-    CyberRenderer() {
+    UserPresetRenderer() {
         GdiplusStartupInput gdiplusStartupInput;
         GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
         RefreshApplications();
     }
 
-    ~CyberRenderer() {
+    ~UserPresetRenderer() {
         if (baseBrush) delete baseBrush;
-        if (borderBrush) delete borderBrush;
         if (startBrush) delete startBrush;
         if (borderPen) delete borderPen;
         if (path) delete path;
@@ -245,15 +238,12 @@ public:
             if (app.bmp) delete app.bmp;
         }
         g_AppIcons.clear();
-
         GdiplusShutdown(gdiplusToken);
     }
 
     void OnPaint(HDC hdc, int width, int height, const DynamicConfig& config) override {
-        EnsureResources(width, height);
+        EnsureResources(width, height, config);
 
-        int iconSize = 32;
-        int padding = 18;
         Graphics graphics(hdc);
         graphics.SetSmoothingMode(SmoothingModeHighQuality);
         graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
@@ -265,8 +255,8 @@ public:
         std::lock_guard<std::mutex> lock(g_AppsMutex);
 
         int startX = 22;
-        int iconSize = 32;
-        int padding = 16;
+        int iconSize = config.iconSize; 
+        int padding = config.padding;   
         int posY = (height - iconSize) / 2;
 
         for (size_t i = 0; i < g_AppIcons.size(); ++i) {
@@ -328,17 +318,18 @@ public:
     }
 
     void OnCommand(const char* command) override {
-        std::string cmd(command);
-        if (cmd == "REFRESH") {
-            RefreshApplications();
-        }
+        if (std::string(command) == "REFRESH") RefreshApplications();
     }
 
     int GetRequiredWidth(const DynamicConfig& config) override {
-        return (g_AppIcons.size() * 32) + ((g_AppIcons.size() - 1) * 18) + 52;
+        if (g_AppIcons.empty()) return 100;
+        int width = (g_AppIcons.size() * config.iconSize) +
+            ((g_AppIcons.size() - 1) * config.padding) +
+            config.margins;
+        return width;
     }
 };
 
 extern "C" __declspec(dllexport) IRenderer* CreateRenderer() {
-    return new CyberRenderer();
+    return new UserPresetRenderer();
 }

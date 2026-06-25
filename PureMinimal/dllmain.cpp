@@ -247,9 +247,11 @@ public:
         GdiplusShutdown(gdiplusToken);
     }
 
-    void OnPaint(HDC hdc, int width, int height) override {
+    void OnPaint(HDC hdc, int width, int height, const DynamicConfig& config) override {
         EnsureResources(width, height);
 
+        int iconSize = 32;
+        int padding = 18;
         Graphics graphics(hdc);
         graphics.SetSmoothingMode(SmoothingModeHighQuality);
         graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
@@ -332,14 +334,8 @@ public:
         }
     }
 
-    int GetRequiredWidth() override {
-        if (g_AppIcons.empty()) return 100;
-        int iconSize = 32;
-        int padding = 14;
-        int margins = 32;
-
-        int width = (g_AppIcons.size() * iconSize) + ((g_AppIcons.size() - 1) * padding) + margins;
-        return width;
+    int GetRequiredWidth(const DynamicConfig& config) override {
+        return (g_AppIcons.size() * 32) + ((g_AppIcons.size() - 1) * 18) + 52;
     }
 };
 
