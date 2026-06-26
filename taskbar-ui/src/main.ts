@@ -1,14 +1,28 @@
-import { app, BrowserWindow, ipcMain ,shell} from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'path';
-import net from 'net';
 import { exec } from 'child_process';
 import fs from 'fs';
+import koffi from 'koffi';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
 let mainWindow: BrowserWindow | null = null;
-const PIPE_PATH = '\\\\.\\pipe\\WindowsTaskbarConfigPipe';
+
+const dllPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'TaskbarEffects.dll')
+  : path.resolve(process.cwd(), 'TaskbarEffects.dll');
+
+console.log('Attempting to load DLL from:', dllPath);
+
+let ExecuteTaskbarLogic: any = null;
+
+try {
+  const lib = koffi.load(dllPath);
+  ExecuteTaskbarLogic = lib.func('ExecuteTaskbarLogic', 'string', ['string']);
+} catch (error) {
+  console.error('CRITICAL: Failed to load TaskbarEffects.dll:', error);
+}
 
 const createWindow = (): void => {
   mainWindow = new BrowserWindow({
@@ -22,7 +36,6 @@ const createWindow = (): void => {
       nodeIntegration: false
     },
   });
-  // mainWindow.webContents.openDevTools();
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
@@ -31,42 +44,46 @@ const createWindow = (): void => {
   }
 };
 
-function sendToPipe(data: string | Buffer): void {
-  const client = net.createConnection(PIPE_PATH, () => {
-    client.write(data);
-    client.end();
-  });
-
-  client.on('error', (err) => {
-    console.log("Pipe connection error:", err.message);
-  });
-}
+ipcMain.handle('send-taskbar-command', async (event, commandStr: string) => {
+  console.log('-> IPC Text Command:', commandStr);
+  if (ExecuteTaskbarLogic) {
+    return ExecuteTaskbarLogic(commandStr);
+  }
+  return 'DLL not loaded';
+});
 
 ipcMain.on('update-taskbar-style', (event, config) => {
-  const payload = JSON.stringify({
-    command: "UPDATE_STYLE",
-    radius: Math.floor(config.radius),
-    padding: Math.floor(config.padding),
-    iconSize: Math.floor(config.iconSize),
-    bg_color: {
-      a: Math.floor(config.bgColor.a),
-      r: Math.floor(config.bgColor.r),
-      g: Math.floor(config.bgColor.g),
-      b: Math.floor(config.bgColor.b)
-    },
-    border_color: {
-      a: Math.floor(config.borderColor.a),
-      r: Math.floor(config.borderColor.r),
-      g: Math.floor(config.borderColor.g),
-      b: Math.floor(config.borderColor.b)
-    }
-  });
 
-  sendToPipe(payload);
+  if (ExecuteTaskbarLogic) {
+    const payload = JSON.stringify({
+      command: "UPDATE_STYLE",
+      radius: Math.floor(config.radius),
+      padding: Math.floor(config.padding),
+      iconSize: Math.floor(config.iconSize),
+      margins: Math.floor(config.margins || 44),
+
+      bgA: Math.floor(config.bgA),
+      bgR: Math.floor(config.bgR),
+      bgG: Math.floor(config.bgG),
+      bgB: Math.floor(config.bgB),
+
+      borderA: Math.floor(config.borderA),
+      borderR: Math.floor(config.borderR),
+      borderG: Math.floor(config.borderG),
+      borderB: Math.floor(config.borderB),
+
+      isDirty: true
+    });
+
+    ExecuteTaskbarLogic(payload);
+  }
 });
 
 ipcMain.on('change-taskbar-dll', (event, dllName: string) => {
-  sendToPipe(`STYLE:${dllName}`);
+  console.log('-> IPC Style DLL Change:', dllName);
+  if (ExecuteTaskbarLogic) {
+    ExecuteTaskbarLogic(`STYLE:${dllName}`);
+  }
 });
 
 app.on('ready', createWindow);

@@ -196,28 +196,43 @@ class UserPresetRenderer : public IRenderer {
     SolidBrush* startBrush = nullptr;
     Pen* borderPen = nullptr;
     int lastW = 0, lastH = 0;
+    int lastRadius = -1;
+    int lastBgA = -1, lastBgR = -1, lastBgG = -1, lastBgB = -1;
+    int lastBrdA = -1, lastBrdR = -1, lastBrdG = -1, lastBrdB = -1;
 
     void EnsureResources(int w, int h, const DynamicConfig& config) {
-        if (w != lastW || h != lastH || config.isDirty) {
+        bool needsRebuild = (w != lastW || h != lastH || config.isDirty ||
+            config.radius != lastRadius ||
+            config.bgA != lastBgA || config.bgR != lastBgR || config.bgG != lastBgG || config.bgB != lastBgB ||
+            config.borderA != lastBrdA || config.borderR != lastBrdR || config.borderG != lastBrdG || config.borderB != lastBrdB);
+
+        if (needsRebuild) {
             if (baseBrush) delete baseBrush;
             if (startBrush) delete startBrush;
             if (borderPen) delete borderPen;
             if (path) delete path;
 
             path = new GraphicsPath();
-            int r = config.radius; 
-            path->AddArc(0, 0, r, r, 180, 90);
-            path->AddArc(w - r, 0, r, r, 270, 90);
-            path->AddArc(w - r, h - r, r, r, 0, 90);
-            path->AddArc(0, h - r, r, r, 90, 90);
+            int r = config.radius;
+            if (r < 1) r = 1;
+
+            if (r * 2 > w) r = w / 2;
+            if (r * 2 > h) r = h / 2;
+
+            path->AddArc(0, 0, r * 2, r * 2, 180, 90);
+            path->AddArc(w - (r * 2), 0, r * 2, r * 2, 270, 90);
+            path->AddArc(w - (r * 2), h - (r * 2), r * 2, r * 2, 0, 90);
+            path->AddArc(0, h - (r * 2), r * 2, r * 2, 90, 90);
             path->CloseFigure();
 
             baseBrush = new SolidBrush(Color(config.bgA, config.bgR, config.bgG, config.bgB));
             borderPen = new Pen(Color(config.borderA, config.borderR, config.borderG, config.borderB), 1.0f);
-
             startBrush = new SolidBrush(Color(config.borderA, config.borderR, config.borderG, config.borderB));
 
             lastW = w; lastH = h;
+            lastRadius = config.radius;
+            lastBgA = config.bgA; lastBgR = config.bgR; lastBgG = config.bgG; lastBgB = config.bgB;
+            lastBrdA = config.borderA; lastBrdR = config.borderR; lastBrdG = config.borderG; lastBrdB = config.borderB;
         }
     }
 
@@ -254,9 +269,9 @@ public:
 
         std::lock_guard<std::mutex> lock(g_AppsMutex);
 
-        int startX = 22;
-        int iconSize = config.iconSize; 
-        int padding = config.padding;   
+        int iconSize = config.iconSize;
+        int padding = config.padding;
+        int startX = config.margins / 2;
         int posY = (height - iconSize) / 2;
 
         for (size_t i = 0; i < g_AppIcons.size(); ++i) {
@@ -264,6 +279,8 @@ public:
                 int s = iconSize;
                 int half = s / 2;
                 int gap = 2;
+
+                if (gap < 1) gap = 1;
 
                 graphics.FillRectangle(startBrush, startX, posY, half - gap, half - gap);
                 graphics.FillRectangle(startBrush, startX + half, posY, half - gap, half - gap);
@@ -322,7 +339,7 @@ public:
     }
 
     int GetRequiredWidth(const DynamicConfig& config) override {
-        if (g_AppIcons.empty()) return 100;
+        if (g_AppIcons.empty()) return config.margins;
         int width = (g_AppIcons.size() * config.iconSize) +
             ((g_AppIcons.size() - 1) * config.padding) +
             config.margins;

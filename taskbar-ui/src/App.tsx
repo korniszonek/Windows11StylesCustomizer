@@ -2,77 +2,123 @@ import React, { useState, useEffect } from 'react';
 import { Code } from 'lucide-react';
 import './index.css';
 
-interface Color { r: number; g: number; b: number; a: number; }
-interface Config { radius: number; padding: number; iconSize: number; bgColor: Color; borderColor: Color; }
+interface Config {
+    radius: number;
+    padding: number;
+    iconSize: number;
+    margins: number;
+    bgA: number;
+    bgR: number;
+    bgG: number;
+    bgB: number;
+    borderA: number;
+    borderR: number;
+    borderG: number;
+    borderB: number;
+    isDirty: boolean;
+}
 
-const PRESETS: Record<string, { radius: number; padding: number; iconSize: number; bgColor: Color; borderColor?: Color }> = {
+declare global {
+    interface Window {
+        electronAPI?: {
+            getWallpaper(): Promise<string | null>;
+            openExternal(url: string): Promise<void>;
+            sendCommandToTaskbar(commandString: string): Promise<string>;
+            updateStyle(config: Config): void;
+            changeStyleDll(styleName: string): void;
+        };
+    }
+}
+
+const PRESETS: Record<string, Omit<Config, 'isDirty'>> = {
     PureMinimal: {
         radius: 8,
         padding: 14,
         iconSize: 32,
-        bgColor: { r: 28, g: 28, b: 28, a: 195 },
-        borderColor: { r: 255, g: 255, b: 255, a: 45 }
+        margins: 44,
+        bgR: 28, bgG: 28, bgB: 28, bgA: 195,
+        borderR: 255, borderG: 255, borderB: 255, borderA: 45
     },
     PinkCrystal: {
         radius: 24,
         padding: 18,
         iconSize: 32,
-        bgColor: { r: 255, g: 182, b: 193, a: 140 },
-        borderColor: { r: 255, g: 255, b: 255, a: 110 }
+        margins: 44,
+        bgR: 255, bgG: 182, bgB: 193, bgA: 140,
+        borderR: 255, borderG: 255, borderB: 255, borderA: 110
     },
     CyberChroma: {
         radius: 12,
         padding: 16,
         iconSize: 32,
-        bgColor: { r: 13, g: 16, b: 25, a: 220 }
+        margins: 44,
+        bgR: 13, bgG: 16, bgB: 25, bgA: 220,
+        borderR: 0, borderG: 240, borderB: 255, borderA: 255
     }
 };
 
 export default function App() {
     const [config, setConfig] = useState<Config>({
-        radius: 12, padding: 16, iconSize: 32,
-        bgColor: { r: 13, g: 16, b: 25, a: 220 },
-        borderColor: { r: 0, g: 240, b: 255, a: 255 }
+        radius: 12, padding: 16, iconSize: 32, margins: 44,
+        bgR: 13, bgG: 16, bgB: 25, bgA: 220,
+        borderR: 0, borderG: 240, borderB: 255, borderA: 255,
+        isDirty: true
     });
     const [activeStyle, setActiveStyle] = useState<string>('UserPreset');
     const [wallpaper, setWallpaper] = useState<string | null>(null);
 
     useEffect(() => {
-        if ((window as any).electronAPI && (window as any).electronAPI.getWallpaper) {
-            (window as any).electronAPI.getWallpaper().then((bgData: string | null) => {
+        if (window.electronAPI?.getWallpaper) {
+            window.electronAPI.getWallpaper().then((bgData: string | null) => {
                 if (bgData) setWallpaper(bgData);
             });
         }
     }, []);
 
     useEffect(() => {
-        if (activeStyle === 'UserPreset' && (window as any).electronAPI) {
-            (window as any).electronAPI.updateStyle(config);
+        if (activeStyle === 'UserPreset' && window.electronAPI?.updateStyle) {
+            window.electronAPI.updateStyle(config);
         }
     }, [config, activeStyle]);
 
+    const sendCommandToTaskbar = async (commandString: string): Promise<void> => {
+        try {
+            if (window.electronAPI?.sendCommandToTaskbar) {
+                const response = await window.electronAPI.sendCommandToTaskbar(commandString);
+                console.log('DLL Response:', response);
+            }
+        } catch (error) {
+            console.error('Failed to communicate with main process:', error);
+        }
+    };
+
     const handleStyleChange = (styleName: string) => {
         setActiveStyle(styleName);
-        if ((window as any).electronAPI) {
-            if (styleName === 'UserPreset') {
-                (window as any).electronAPI.changeStyleDll('UserPreset');
-                (window as any).electronAPI.updateStyle(config);
-            } else {
-                (window as any).electronAPI.changeStyleDll(styleName);
+
+        if (!window.electronAPI) return;
+
+        if (styleName === 'UserPreset') {
+            window.electronAPI.changeStyleDll('UserPreset');
+            window.electronAPI.updateStyle({ ...config, isDirty: true });
+        } else {
+            window.electronAPI.changeStyleDll(styleName);
+
+            const presetConfig = PRESETS[styleName];
+            if (presetConfig) {
+                window.electronAPI.updateStyle({
+                    ...presetConfig,
+                    isDirty: true 
+                });
             }
         }
     };
 
-    const updateColor = (type: 'bgColor' | 'borderColor', channel: keyof Color, value: string) => {
-        setConfig(prev => ({ ...prev, [type]: { ...prev[type], [channel]: parseInt(value) } }));
+    const updateColorKey = (key: keyof Config, value: string) => {
+        setConfig(prev => ({ ...prev, [key]: parseInt(value), isDirty: true }));
     };
 
     const handleCloseApp = () => {
         window.close();
-    };
-
-    const toRgbaString = (color: Color) => {
-        return `rgba(${color.r}, ${color.g}, ${color.b}, ${color.a / 255})`;
     };
 
     const currentVisuals = activeStyle === 'UserPreset' ? config : PRESETS[activeStyle];
@@ -82,9 +128,10 @@ export default function App() {
     const getDynamicStyles = () => {
         if (!currentVisuals) return {};
 
+        const cv = currentVisuals;
         let bgImage = 'none';
-        let bgColor = toRgbaString(currentVisuals.bgColor);
-        let border = currentVisuals.borderColor ? `1px solid ${toRgbaString(currentVisuals.borderColor)}` : 'none';
+        let bgColor = `rgba(${cv.bgR}, ${cv.bgG}, ${cv.bgB}, ${cv.bgA / 255})`;
+        let border = `1px solid rgba(${cv.borderR}, ${cv.borderG}, ${cv.borderB}, ${cv.borderA / 255})`;
 
         let iconBg = 'rgba(255, 255, 255, 0.25)';
         let iconBorder = 'none';
@@ -96,22 +143,22 @@ export default function App() {
             iconBorder = '1px solid rgba(255, 255, 255, 0.4)';
         } else if (isCyber) {
             bgColor = 'transparent';
-            bgImage = `linear-gradient(${toRgbaString(PRESETS.CyberChroma.bgColor)}, ${toRgbaString(PRESETS.CyberChroma.bgColor)}), linear-gradient(135deg, rgba(0, 240, 255, 1) 0%, rgba(255, 0, 128, 1) 100%)`;
+            bgImage = `linear-gradient(rgba(${PRESETS.CyberChroma.bgR}, ${PRESETS.CyberChroma.bgG}, ${PRESETS.CyberChroma.bgB}, ${PRESETS.CyberChroma.bgA / 255}), rgba(${PRESETS.CyberChroma.bgR}, ${PRESETS.CyberChroma.bgG}, ${PRESETS.CyberChroma.bgB}, ${PRESETS.CyberChroma.bgA / 255})), linear-gradient(135deg, rgba(0, 240, 255, 1) 0%, rgba(255, 0, 128, 1) 100%)`;
             border = '1.5px solid transparent';
             iconBg = 'rgba(0, 240, 255, 0.35)';
             iconBorder = '1px solid rgba(0, 240, 255, 0.7)';
         }
 
         return {
-            '--tb-radius': `${currentVisuals.radius / 2}px`,
-            '--tb-padding': `${currentVisuals.padding / 3}px ${currentVisuals.padding / 1.5}px`,
+            '--tb-radius': `${cv.radius / 2}px`,
+            '--tb-padding': `${cv.padding / 3}px ${cv.padding / 1.5}px`,
             '--tb-bg-color': bgColor,
             '--tb-bg-image': bgImage,
             '--tb-border': border,
             '--tb-bg-origin': isCyber ? 'border-box' : 'padding-box',
             '--tb-bg-clip': isCyber ? 'content-box, border-box' : 'padding-box',
-            '--icon-size': `${currentVisuals.iconSize / 1.5}px`,
-            '--icon-margin': `0 ${currentVisuals.padding / 4}px`,
+            '--icon-size': `${cv.iconSize / 1.5}px`,
+            '--icon-margin': `0 ${cv.padding / 4}px`,
             '--icon-bg': iconBg,
             '--icon-border': iconBorder,
         } as React.CSSProperties;
@@ -150,31 +197,46 @@ export default function App() {
                     <div className="section-title">Geometry Settings</div>
                     <div className="slider-row">
                         <span>Corner Radius ({config.radius}px)</span>
-                        <input type="range" min="0" max="40" value={config.radius} onChange={e => setConfig(prev => ({ ...prev, radius: parseInt(e.target.value) }))} />
+                        <input type="range" min="0" max="40" value={config.radius} onChange={e => setConfig(prev => ({ ...prev, radius: parseInt(e.target.value), isDirty: true }))} />
                     </div>
                     <div className="slider-row">
                         <span>Icon Padding ({config.padding}px)</span>
-                        <input type="range" min="4" max="32" value={config.padding} onChange={e => setConfig(prev => ({ ...prev, padding: parseInt(e.target.value) }))} />
+                        <input type="range" min="4" max="32" value={config.padding} onChange={e => setConfig(prev => ({ ...prev, padding: parseInt(e.target.value), isDirty: true }))} />
                     </div>
                     <div className="slider-row">
                         <span>Icon Size ({config.iconSize}px)</span>
-                        <input type="range" min="16" max="48" value={config.iconSize} onChange={e => setConfig(prev => ({ ...prev, iconSize: parseInt(e.target.value) }))} />
+                        <input type="range" min="16" max="48" value={config.iconSize} onChange={e => setConfig(prev => ({ ...prev, iconSize: parseInt(e.target.value), isDirty: true }))} />
                     </div>
 
                     <div className="section-title">Background Color (RGBA)</div>
                     <div className="color-row">
-                        <input type="range" min="0" max="255" value={config.bgColor.r} onChange={e => updateColor('bgColor', 'r', e.target.value)} />
-                        <input type="range" min="0" max="255" value={config.bgColor.g} onChange={e => updateColor('bgColor', 'g', e.target.value)} />
-                        <input type="range" min="0" max="255" value={config.bgColor.b} onChange={e => updateColor('bgColor', 'b', e.target.value)} />
-                        <input type="range" min="0" max="255" value={config.bgColor.a} onChange={e => updateColor('bgColor', 'a', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.bgR} onChange={e => updateColorKey('bgR', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.bgG} onChange={e => updateColorKey('bgG', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.bgB} onChange={e => updateColorKey('bgB', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.bgA} onChange={e => updateColorKey('bgA', e.target.value)} />
                     </div>
 
                     <div className="section-title">Border Color (RGBA)</div>
                     <div className="color-row">
-                        <input type="range" min="0" max="255" value={config.borderColor.r} onChange={e => updateColor('borderColor', 'r', e.target.value)} />
-                        <input type="range" min="0" max="255" value={config.borderColor.g} onChange={e => updateColor('borderColor', 'g', e.target.value)} />
-                        <input type="range" min="0" max="255" value={config.borderColor.b} onChange={e => updateColor('borderColor', 'b', e.target.value)} />
-                        <input type="range" min="0" max="255" value={config.borderColor.a} onChange={e => updateColor('borderColor', 'a', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.borderR} onChange={e => updateColorKey('borderR', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.borderG} onChange={e => updateColorKey('borderG', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.borderB} onChange={e => updateColorKey('borderB', e.target.value)} />
+                        <input type="range" min="0" max="255" value={config.borderA} onChange={e => updateColorKey('borderA', e.target.value)} />
+                    </div>
+
+                    <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
+                        <button
+                            onClick={() => sendCommandToTaskbar("HIDE:1")}
+                            style={{ padding: '8px 12px', background: '#ff4444', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                            Test: UKRYJ PASEK
+                        </button>
+                        <button
+                            onClick={() => sendCommandToTaskbar("HIDE:0")}
+                            style={{ padding: '8px 12px', background: '#00cc66', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                            Test: POKAŻ PASEK
+                        </button>
                     </div>
                 </div>
             </div>
@@ -201,8 +263,8 @@ export default function App() {
                         href="#"
                         onClick={(e) => {
                             e.preventDefault();
-                            if ((window as any).electronAPI && (window as any).electronAPI.openExternal) {
-                                (window as any).electronAPI.openExternal('https://github.com/korniszonek');
+                            if (window.electronAPI?.openExternal) {
+                                window.electronAPI.openExternal('https://github.com/korniszonek');
                             }
                         }}
                         className="github-link"

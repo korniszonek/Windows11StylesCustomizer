@@ -4,16 +4,34 @@
     <Platform Name="x86" />
   </Configurations>
   <Folder Name="/Styles/">
-    <Project Path="../CyberChroma/CyberChroma.vcxproj" Id="79d259b1-7969-40b1-809c-15f7e5bf2f9b" />
-    <Project Path="../PinkCrystal/PinkCrystal.vcxproj" Id="17d75c85-376b-4465-b601-360080dd3601" />
-    <Project Path="../PureMinimal/PureMinimal.vcxproj" Id="34af06b3-79be-48a6-9226-825eb952acef" />
+    <Project Path="../CyberChroma/CyberChroma.vcxproj" Id="79d259b1-7969-40b1-809c-15f7e5bf2f9b">
+      <BuildType Project="Release" />
+    </Project>
+    <Project Path="../PinkCrystal/PinkCrystal.vcxproj" Id="17d75c85-376b-4465-b601-360080dd3601">
+      <BuildType Project="Release" />
+    </Project>
+    <Project Path="../PureMinimal/PureMinimal.vcxproj" Id="34af06b3-79be-48a6-9226-825eb952acef">
+      <BuildType Project="Release" />
+    </Project>
+    <Project Path="../UserStyle/UserStyle.vcxproj" Id="4512afb9-69d8-46b6-8080-e5f7e520abad">
+      <BuildType Project="Release" />
+    </Project>
   </Folder>
   <Project Path="../injector/injector.vcxproj" Id="68681503-71a1-464f-a5f8-13b31aec8f9e">
     <BuildDependency Project="DllWindowsTaskbar.vcxproj" />
+    <BuildType Project="Release" />
   </Project>
-  <Project Path="../PipeClient/PipeClient.vcxproj" Id="bc57af8f-10dd-4bdc-800c-aa41f263aff1" />
-  <Project Path="../taskbarLogic/taskbarLogic.vcxproj" Id="715876f3-5d22-459a-a389-c9a717638a15" />
+  <Project Path="../PipeClient/PipeClient.vcxproj" Id="bc57af8f-10dd-4bdc-800c-aa41f263aff1">
+    <BuildType Project="Release" />
+  </Project>
+  <Project Path="../TaskbarEffects/TaskbarEffects.vcxproj" Id="2712f445-5eca-4530-9700-082ad1c04083">
+    <BuildType Project="Release" />
+  </Project>
+  <Project Path="../taskbarLogic/taskbarLogic.vcxproj" Id="715876f3-5d22-459a-a389-c9a717638a15">
+    <BuildType Project="Release" />
+  </Project>
   <Project Path="DllWindowsTaskbar.vcxproj" Id="d7dbe3a0-5264-4460-9e81-6f036b8b80be">
     <BuildDependency Project="../taskbarLogic/taskbarLogic.vcxproj" />
+    <BuildType Project="Release" />
   </Project>
 </Solution>

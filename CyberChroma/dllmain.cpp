@@ -191,39 +191,51 @@ class CyberRenderer : public IRenderer {
     ULONG_PTR gdiplusToken;
     GraphicsPath* path = nullptr;
     SolidBrush* baseBrush = nullptr;
-    LinearGradientBrush* borderBrush = nullptr;
     SolidBrush* startBrush = nullptr;
     Pen* borderPen = nullptr;
     int lastW = 0, lastH = 0;
+    int lastRadius = -1;
+    int lastBgA = -1, lastBgR = -1, lastBgG = -1, lastBgB = -1;
+    int lastBrdA = -1, lastBrdR = -1, lastBrdG = -1, lastBrdB = -1;
 
-    void EnsureResources(int w, int h) {
-        if (w != lastW || h != lastH) {
-            if (baseBrush) delete baseBrush;
-            if (borderBrush) delete borderBrush;
+    void EnsureResources(int w, int h, const DynamicConfig& config) {
+        bool needsRebuild = (w != lastW || h != lastH ||
+            config.radius != lastRadius ||
+            config.bgA != lastBgA || config.bgR != lastBgR || config.bgG != lastBgG || config.bgB != lastBgB ||
+            config.borderA != lastBrdA || config.borderR != lastBrdR || config.borderG != lastBrdG || config.borderB != lastBrdB);
+
+        if (needsRebuild) {
+            if (glassBrush) delete glassBrush;
             if (startBrush) delete startBrush;
             if (borderPen) delete borderPen;
             if (path) delete path;
 
             path = new GraphicsPath();
-            int radius = 12; 
-            path->AddArc(0, 0, radius, radius, 180, 90);
-            path->AddArc(w - radius, 0, radius, radius, 270, 90);
-            path->AddArc(w - radius, h - radius, radius, radius, 0, 90);
-            path->AddArc(0, h - radius, radius, radius, 90, 90);
+            int radius = config.radius;
+            if (radius < 1) radius = 1;
+
+            if (radius * 2 > w) radius = w / 2;
+            if (radius * 2 > h) radius = h / 2;
+
+            path->AddArc(0, 0, radius * 2, radius * 2, 180, 90);
+            path->AddArc(w - (radius * 2), 0, radius * 2, radius * 2, 270, 90);
+            path->AddArc(w - (radius * 2), h - (radius * 2), radius * 2, radius * 2, 0, 90);
+            path->AddArc(0, h - (radius * 2), radius * 2, radius * 2, 90, 90);
             path->CloseFigure();
 
-            baseBrush = new SolidBrush(Color(220, 13, 16, 25));
-
-            borderBrush = new LinearGradientBrush(
-                Point(0, 0), Point(w, h),
-                Color(255, 0, 240, 255), // Cyber Cyan
-                Color(255, 255, 0, 128)  // Neon Pink/Magenta
+            glassBrush = new LinearGradientBrush(
+                Point(0, 0), Point(0, h),
+                Color(config.bgA, config.bgR, config.bgG, config.bgB),
+                Color((config.bgA > 40 ? config.bgA - 40 : 0), config.bgR, config.bgG, config.bgB)
             );
-            borderPen = new Pen(borderBrush, 1.5f);
 
-            startBrush = new SolidBrush(Color(255, 0, 240, 255));
+            borderPen = new Pen(Color(config.borderA, config.borderR, config.borderG, config.borderB), 1.0f);
+            startBrush = new SolidBrush(Color(config.borderA, config.borderR, config.borderG, config.borderB));
 
             lastW = w; lastH = h;
+            lastRadius = config.radius;
+            lastBgA = config.bgA; lastBgR = config.bgR; lastBgG = config.bgG; lastBgB = config.bgB;
+            lastBrdA = config.borderA; lastBrdR = config.borderR; lastBrdG = config.borderG; lastBrdB = config.borderB;
         }
     }
 
@@ -236,7 +248,6 @@ public:
 
     ~CyberRenderer() {
         if (baseBrush) delete baseBrush;
-        if (borderBrush) delete borderBrush;
         if (startBrush) delete startBrush;
         if (borderPen) delete borderPen;
         if (path) delete path;
@@ -250,10 +261,11 @@ public:
     }
 
     void OnPaint(HDC hdc, int width, int height, const DynamicConfig& config) override {
-        EnsureResources(width, height);
+        EnsureResources(width, height, config);
 
-        int iconSize = 32;
-        int padding = 18;
+        int iconSize = config.iconSize;
+        int padding = config.padding;
+
         Graphics graphics(hdc);
         graphics.SetSmoothingMode(SmoothingModeHighQuality);
         graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
@@ -264,9 +276,7 @@ public:
 
         std::lock_guard<std::mutex> lock(g_AppsMutex);
 
-        int startX = 22;
-        int iconSize = 32;
-        int padding = 16;
+        int startX = padding;
         int posY = (height - iconSize) / 2;
 
         for (size_t i = 0; i < g_AppIcons.size(); ++i) {
@@ -274,6 +284,8 @@ public:
                 int s = iconSize;
                 int half = s / 2;
                 int gap = 2;
+
+                if (gap < 1) gap = 1;
 
                 graphics.FillRectangle(startBrush, startX, posY, half - gap, half - gap);
                 graphics.FillRectangle(startBrush, startX + half, posY, half - gap, half - gap);
@@ -335,7 +347,8 @@ public:
     }
 
     int GetRequiredWidth(const DynamicConfig& config) override {
-        return (g_AppIcons.size() * 32) + ((g_AppIcons.size() - 1) * 18) + 52;
+        if (g_AppIcons.empty()) return config.padding * 2;
+        return (g_AppIcons.size() * config.iconSize) + ((g_AppIcons.size() - 1) * config.padding) + (config.padding * 2);
     }
 };
 
