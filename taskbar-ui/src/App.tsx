@@ -224,20 +224,6 @@ export default function App() {
                         <input type="range" min="0" max="255" value={config.borderA} onChange={e => updateColorKey('borderA', e.target.value)} />
                     </div>
 
-                    <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
-                        <button
-                            onClick={() => sendCommandToTaskbar("HIDE:1")}
-                            style={{ padding: '8px 12px', background: '#ff4444', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                        >
-                            Test: UKRYJ PASEK
-                        </button>
-                        <button
-                            onClick={() => sendCommandToTaskbar("HIDE:0")}
-                            style={{ padding: '8px 12px', background: '#00cc66', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                        >
-                            Test: POKAŻ PASEK
-                        </button>
-                    </div>
                 </div>
             </div>
 
