@@ -98,6 +98,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     int length = GetWindowTextLengthW(hwnd);
     if (length == 0) return TRUE;
 
+    // for UWP process filter
     wchar_t className[256];
     if (GetClassNameW(hwnd, className, 256)) {
         std::wstring cls(className);
@@ -106,6 +107,7 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
             return TRUE;
         }
 
+        // if its uwp process - mask it
         if (cls == L"ApplicationFrameWindow") {
             int cloaked = 0;
             HRESULT hr = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
@@ -158,11 +160,13 @@ BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
+
 void RefreshApplications() {
     std::lock_guard<std::mutex> lock(g_AppsMutex);
 
     for (auto& app : g_AppIcons) {
         if (app.bmp) delete app.bmp;
+        if (app.hIcon) DestroyIcon(app.hIcon);
     }
     g_AppIcons.clear();
 
@@ -205,10 +209,10 @@ class CyberRenderer : public IRenderer {
             config.borderA != lastBrdA || config.borderR != lastBrdR || config.borderG != lastBrdG || config.borderB != lastBrdB);
 
         if (needsRebuild) {
-            if (glassBrush) delete glassBrush;
-            if (startBrush) delete startBrush;
-            if (borderPen) delete borderPen;
-            if (path) delete path;
+            if (baseBrush) { delete baseBrush; baseBrush = nullptr; }
+            if (startBrush) { delete startBrush; startBrush = nullptr; }
+            if (borderPen) { delete borderPen; borderPen = nullptr; }
+            if (path) { delete path; path = nullptr; }
 
             path = new GraphicsPath();
             int radius = config.radius;
@@ -223,12 +227,7 @@ class CyberRenderer : public IRenderer {
             path->AddArc(0, h - (radius * 2), radius * 2, radius * 2, 90, 90);
             path->CloseFigure();
 
-            glassBrush = new LinearGradientBrush(
-                Point(0, 0), Point(0, h),
-                Color(config.bgA, config.bgR, config.bgG, config.bgB),
-                Color((config.bgA > 40 ? config.bgA - 40 : 0), config.bgR, config.bgG, config.bgB)
-            );
-
+            baseBrush = new SolidBrush(Color(config.bgA, config.bgR, config.bgG, config.bgB));
             borderPen = new Pen(Color(config.borderA, config.borderR, config.borderG, config.borderB), 1.0f);
             startBrush = new SolidBrush(Color(config.borderA, config.borderR, config.borderG, config.borderB));
 
@@ -240,7 +239,7 @@ class CyberRenderer : public IRenderer {
     }
 
 public:
-    CyberRenderer() {
+    CyberRenderer() : gdiplusToken(0) {
         GdiplusStartupInput gdiplusStartupInput;
         GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
         RefreshApplications();
@@ -254,6 +253,7 @@ public:
 
         for (auto& app : g_AppIcons) {
             if (app.bmp) delete app.bmp;
+            if (app.hIcon) DestroyIcon(app.hIcon);
         }
         g_AppIcons.clear();
 
@@ -262,9 +262,6 @@ public:
 
     void OnPaint(HDC hdc, int width, int height, const DynamicConfig& config) override {
         EnsureResources(width, height, config);
-
-        int iconSize = config.iconSize;
-        int padding = config.padding;
 
         Graphics graphics(hdc);
         graphics.SetSmoothingMode(SmoothingModeHighQuality);
@@ -276,17 +273,21 @@ public:
 
         std::lock_guard<std::mutex> lock(g_AppsMutex);
 
+        int iconSize = config.iconSize;
+        int padding = config.padding;
         int startX = padding;
         int posY = (height - iconSize) / 2;
 
         for (size_t i = 0; i < g_AppIcons.size(); ++i) {
             if (g_AppIcons[i].isStartButton) {
-                int s = iconSize;
-                int half = s / 2;
-                int gap = 2;
+                // drawing win 11 logo
+                int s = iconSize; // 32
+                int half = s / 2; // 16
+                int gap = 2;      // space between
 
                 if (gap < 1) gap = 1;
 
+                // Rects
                 graphics.FillRectangle(startBrush, startX, posY, half - gap, half - gap);
                 graphics.FillRectangle(startBrush, startX + half, posY, half - gap, half - gap);
                 graphics.FillRectangle(startBrush, startX, posY + half, half - gap, half - gap);
@@ -311,10 +312,8 @@ public:
                 y >= app.hitBox.top && y <= app.hitBox.bottom) {
 
                 if (app.isStartButton) {
-                    keybd_event(VK_CONTROL, 0, 0, 0);
-                    keybd_event(VK_ESCAPE, 0, 0, 0);
-                    keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0);
-                    keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+                    keybd_event(VK_LWIN, 0, 0, 0);
+                    keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0);
                     break;
                 }
 
@@ -326,12 +325,10 @@ public:
 
                 if (isMinimized) {
                     ShowWindow(hwndTarget, SW_RESTORE);
-                    SendMessageW(hwndTarget, WM_SYSCOMMAND, SC_RESTORE, 0);
                     SetForegroundWindow(hwndTarget);
                 }
                 else {
                     ShowWindowAsync(hwndTarget, SW_MINIMIZE);
-                    PostMessageW(hwndTarget, WM_SYSCOMMAND, SC_MINIMIZE, 0);
                 }
 
                 break;
@@ -347,8 +344,9 @@ public:
     }
 
     int GetRequiredWidth(const DynamicConfig& config) override {
+        std::lock_guard<std::mutex> lock(g_AppsMutex);
         if (g_AppIcons.empty()) return config.padding * 2;
-        return (g_AppIcons.size() * config.iconSize) + ((g_AppIcons.size() - 1) * config.padding) + (config.padding * 2);
+        return (int)(g_AppIcons.size() * config.iconSize) + ((int)g_AppIcons.size() - 1) * config.padding + (config.padding * 2);
     }
 };
 
